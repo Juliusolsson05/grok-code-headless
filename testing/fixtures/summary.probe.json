@@ -1,0 +1,23 @@
+{
+  "info": {
+    "id": "01a07ddc-8ec3-7242-b723-b53f2b6cc23f",
+    "cwd": "/private/var/folders/tv/yfsy4sfx1qnbs39hbtzgl0xc0000gn/T/opencode/grok-pty-probe4"
+  },
+  "session_summary": "250-Word Lighthouse Keeper Streaming Story",
+  "created_at": "2026-09-07T21:53:21.616292Z",
+  "updated_at": "2026-09-07T21:53:39.213128Z",
+  "num_messages": 4,
+  "num_chat_messages": 8,
+  "current_model_id": "grok-4.6",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "request_id": "e97c451c-849e-487a-959e-326b78124384",
+  "grok_home": "/Users/redacted/.grok",
+  "last_active_at": "2026-09-07T21:53:38.197979Z",
+  "generated_title": "250-Word Lighthouse Keeper Streaming Story",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "reasoning_effort": "high",
+  "last_turn_summary": "250-word lighthouse-keeper story delivered in full",
+  "last_turn_summary_prompt_id": "e97c451c-849e-487a-959e-326b78124384"
+}
