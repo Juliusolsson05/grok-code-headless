@@ -4,6 +4,6 @@
     "dist",
     "node_modules",
     "src/**/*.test.ts",
-    "src/transcript/LegacyFreshRolloutOracle.ts"
+    "src/**/testing/**"
   ]
 }
