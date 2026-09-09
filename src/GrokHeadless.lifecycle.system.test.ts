@@ -52,6 +52,30 @@ afterEach(async () => {
 })
 
 describe('headless runtime boundary contracts', () => {
+  it('exposes raw terminal bytes and the owned pid without reconstructing bytes from screen snapshots', async () => {
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home') })
+    const data: string[] = []
+    runtime.on('pty-data', chunk => data.push(chunk))
+    const bytes = '\x1b[?1049h\x1b[31mfixture\x1b[0m'
+    processDouble.paint(bytes)
+    expect(data).toEqual([bytes])
+    expect(runtime.pid).toBe(processDouble.pty.pid)
+    await runtime.dispose()
+    processDouble.paint('late data')
+    expect(data).toEqual([bytes])
+    expect(runtime.pid).toBeUndefined()
+    expect(processDouble.data.size).toBe(0)
+  })
+
+  it('contains raw-terminal subscriber failures without interrupting native shutdown', async () => {
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home') })
+    runtime.on('pty-data', () => { throw new Error('controlled raw subscriber failure') })
+    expect(() => processDouble.paint('fixture')).not.toThrow()
+    expect(runtime.lastError?.message).toBe('controlled raw subscriber failure')
+    await runtime.dispose()
+    expect(processDouble.data.size).toBe(0)
+  })
+
   it('exposes ordered history replacement boundaries and marks replacement records as replay', async () => {
     const dir = sessionFiles()
     const path = join(dir, 'chat_history.jsonl')

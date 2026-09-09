@@ -55,6 +55,8 @@ export interface GrokExitEvent { code: number | undefined; signal: number | unde
 export interface GrokActivityEvent { at: number }
 export interface GrokIdleEvent { at: number }
 export interface GrokHeadlessEvents {
+  /** Native bytes for terminal consumers; never synthesized from screen text. */
+  'pty-data': string
   screen: GrokScreenEvent
   'grok-entry': GrokEntryEvent
   'grok-update': GrokUpdateEvent & GrokSessionEvent & GrokObservationMetadata
@@ -82,6 +84,7 @@ export class GrokHeadless extends EventEmitter {
   private readonly waiters = new Map<ReturnType<typeof setInterval>, () => void>()
   private readonly tailers: Array<{ drain(): Promise<void>; close(): Promise<void> }> = []
   private exitSubscription: IDisposable | undefined
+  private dataSubscription: IDisposable | undefined
   private closed = false
   private cleanupPromise: Promise<void> | undefined
   private disposePromise: Promise<void> | undefined
@@ -170,6 +173,9 @@ export class GrokHeadless extends EventEmitter {
         this.emit('screen', { snapshot })
       })
       this.terminal.attach()
+      this.dataSubscription = this.pty.onData(data => {
+        try { this.emit('pty-data', data) } catch (error) { this.emitError(error) }
+      })
       this.exitSubscription = this.pty.onExit(({ exitCode, signal }) => {
         this.closed = true
         this.exitSubscription?.dispose()
@@ -179,6 +185,7 @@ export class GrokHeadless extends EventEmitter {
         }).catch(error => this.emitError(error as Error))
       })
     } catch (error) {
+      this.dataSubscription?.dispose()
       this.pty.kill()
       throw error
     }
@@ -259,6 +266,7 @@ export class GrokHeadless extends EventEmitter {
   }
 
   get sessionIdentity(): string { return this.sessionId }
+  get pid(): number | undefined { return this.closed ? undefined : this.pty.pid }
   get lastError(): Error | undefined { return this.lastFailure }
   get streamingInfo(): GrokResponsesProxy['info'] | undefined { return this.ownedRelay?.info }
   get commandPermission(): GrokCommandPermission | null {
@@ -399,6 +407,8 @@ export class GrokHeadless extends EventEmitter {
       }
     }
     this.waiters.clear()
+    this.dataSubscription?.dispose()
+    this.dataSubscription = undefined
     this.terminal.dispose()
     // PTY exit may follow kill asynchronously. The exit handler, not this
     // observation cleanup, owns that last subscription and acknowledgement.
