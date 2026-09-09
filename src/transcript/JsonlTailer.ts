@@ -1,0 +1,557 @@
+import { watch } from 'chokidar'
+import {
+  closeSync,
+  createReadStream,
+  fstatSync,
+  openSync,
+  readSync,
+  type ReadStream,
+} from 'fs'
+import { mkdir, readdir } from 'fs/promises'
+import { basename } from 'path'
+
+// Node-only (chokidar + fs). Used by downstream applications that need
+// to tail CC's transcript files. NOT importable from browser contexts.
+
+/**
+ * Watches a single JSONL file and emits parsed objects line-by-line as the
+ * file grows. Append-only: it remembers a byte offset and reads everything
+ * past it on the tick of a private polling timer.
+ *
+ * Partial trailing lines are buffered until the next read brings the
+ * terminating newline.
+ *
+ * Why a private stat poll instead of chokidar/fs.watchFile:
+ *   chokidar on macOS defaults to fs.watch-based change detection for
+ *   single files, which is known to silently miss rapid appends from
+ *   non-editor writers (append-only files that don't atomic-rename).
+ *   Users saw it concretely: submit a prompt, CC writes
+ *   the user entry + a bunch of attachments to the JSONL, and the
+ *   feed wouldn't update until some unrelated later write nudged
+ *   chokidar into re-reading. "The prompt didn't appear."
+ *
+ *   A direct timer polls stat() on an interval. Unlike fs.watchFile it has
+ *   no hidden first-baseline registration phase, so an append during startup
+ *   cannot become the baseline and disappear until a watchdog fires. At
+ *   100ms interval the latency is imperceptible
+ *   (~half a human reaction time), the CPU cost is trivial (one stat
+ *   call every 100ms per tailer), and it's reliable on every fs/OS
+ *   combination because it doesn't rely on kernel event delivery.
+ *
+ * Concurrency: `readNew()` can be triggered while a previous read is
+ * still in flight — the fs.read stream is async, so its `end` handler
+ * (where `offset` is advanced) runs on a future tick. Without
+ * serialization a second trigger could read from a stale offset,
+ * producing duplicate emits AND stomping `offset` backwards in the
+ * first call's `end` handler. The `reading` / `pendingRead` flags
+ * below form a simple "queue at most one re-entry" pattern: while a
+ * read is in flight, subsequent triggers just set `pendingRead`; when
+ * the in-flight read completes we immediately re-run if anything was
+ * queued. This guarantees strict serialization with zero unbounded
+ * queuing and zero concurrency.
+ */
+export type FileTailerOptions = {
+  bootstrapTailLines?: number
+  /** Full-history boundaries; cannot be combined with bounded-tail bootstrap. */
+  onSnapshot?: (event: FileTailerSnapshotEvent) => void
+  /**
+   * Bind every emitted byte to the dev:ino generation that authorized this
+   * physical tail. Pathnames are mutable directory entries, not capabilities.
+   */
+  expectedGenerationId?: string
+  /** @deprecated Direct private polling no longer needs a watcher-stall watchdog. */
+  watchdogMs?: number
+}
+
+export type FileTailerSnapshotEvent =
+  | { type: 'reset'; generation: number; snapshotByteLength: number }
+  | {
+    type: 'caught-up'; generation: number; byteOffset: number
+    snapshotByteLength: number
+    /** False for partial/error reads or rows rejected by onEntry. Not provider idle. */
+    complete: boolean
+  }
+
+export type FileTailerEntryMetadata = {
+  /** Absolute byte position of the JSONL line's first byte in this inode. */
+  lineStartOffset: number
+  /** Preserve number lexemes and opaque fields for corpus replay. */
+  rawLine: string
+  /** Increments on inode replacement or observed truncation. */
+  generation: number
+}
+
+export class RolloutGenerationMismatchError extends Error {
+  constructor() {
+    // WHY the error is intentionally structure-only. Raw paths and dev:ino
+    // values are authorization internals and can flow into recorder-visible
+    // rollout-error events; neither value is needed to explain the failure.
+    super('Rollout generation mismatch at physical tail boundary')
+    this.name = 'RolloutGenerationMismatchError'
+  }
+}
+
+export class FileTailer<T> {
+  private generation = 0
+  private offset = 0
+  // Keep an unterminated line as raw bytes, not decoded text. A poll can stop
+  // between bytes of one UTF-8 code point; decoding each poll independently
+  // flushes U+FFFD at both sides of that boundary and makes byte offsets drift
+  // from the inode forever. Newline is an ASCII byte and cannot occur inside a
+  // multibyte sequence, so raw buffering lets us decode only complete lines
+  // while advancing identities by the exact bytes actually consumed.
+  private buffer = Buffer.alloc(0)
+  private bufferStartOffset = 0
+  private closed = false
+  // Poll interval for fs.watchFile in milliseconds. 100ms gives
+  // reliable pickup with imperceptible latency and negligible CPU.
+  // Tuning lower doesn't noticeably help humans; tuning higher
+  // starts to show up as "typing feels sluggish" when submit →
+  // feed-update takes noticeable wall time.
+  private static readonly POLL_INTERVAL_MS = 100
+  // Resume bootstrap intentionally reads a bounded tail slice instead
+  // of the whole rollout. The goal is "show the recent context and
+  // start following new appends", not "hydrate a megabyte-scale
+  // historical archive before first paint". 512 KB is large enough to
+  // hold the last few hundred normal JSONL lines even when some tool
+  // outputs are chunky, while still capping startup cost.
+  // (Doc back-ported from claude-code-headless's copy — the rationale
+  // was written there after this file was forked. agent-code#394 §8.)
+  private static readonly BOOTSTRAP_TAIL_BYTES = 512 * 1024
+  private reading = false
+  private pendingRead = false
+  private poller: ReturnType<typeof setInterval> | null = null
+  private fileIdentity: string | null = null
+  private fileCtimeMs: number | null = null
+  private activeStream: ReadStream | null = null
+  private activeRead: Promise<void> | null = null
+  private readonly expectedGenerationId: string | null
+  private generationRejected = false
+  private readonly onSnapshot: FileTailerOptions['onSnapshot']
+  private pendingReset: Extract<FileTailerSnapshotEvent, { type: 'reset' }> | undefined
+  private generationHasErrors = false
+  private lastCheckpoint = ''
+  private snapshotByteLength = 0
+
+  constructor(
+    private readonly filePath: string,
+    private readonly onEntry: (entry: T, metadata: FileTailerEntryMetadata) => void,
+    private readonly onError?: (err: Error) => void,
+    options?: FileTailerOptions,
+  ) {
+    this.expectedGenerationId = options?.expectedGenerationId ?? null
+    this.onSnapshot = options?.onSnapshot
+    const bootstrapTailLines = options?.bootstrapTailLines ?? 0
+    if (bootstrapTailLines > 0 && this.onSnapshot) {
+      // A tail slice cannot authorize replacement of a consumer's complete
+      // history. Keep this existing performance mode separate and explicit.
+      throw new Error('Full-history snapshots cannot use bounded-tail bootstrap')
+    }
+    if (bootstrapTailLines > 0) {
+      this.bootstrapTail(bootstrapTailLines)
+    } else {
+      // Begin reading whatever is already in the file during construction —
+      // CC often writes several entries before the watcher would tick. The
+      // stream itself is asynchronous; serialized timer ticks reconcile any
+      // append that lands while that initial stream is in flight.
+      this.readNew(true)
+    }
+    // WHY each tailer owns its timer: closing one session can never unregister another session's
+    // observer for the same rollout path, and there is no watcher-baseline handoff in which a write
+    // can disappear. The read serializer coalesces ticks while disk I/O is active.
+    this.poller = setInterval(() => this.readNew(), FileTailer.POLL_INTERVAL_MS)
+    this.poller.unref?.()
+  }
+
+  private bootstrapTail(maxLines: number): void {
+    if (this.closed || maxLines <= 0) return
+
+    let fd: number | null = null
+    let stat: ReturnType<typeof fstatSync>
+    try {
+      fd = openSync(this.filePath, 'r')
+      stat = fstatSync(fd)
+      const identity = `${stat.dev}:${stat.ino}`
+      this.requireExpectedGeneration(identity)
+      if (stat.size <= 0) {
+        this.offset = 0
+        this.fileIdentity = identity
+        this.fileCtimeMs = stat.ctimeMs
+        closeSync(fd)
+        return
+      }
+
+      const bytesToRead = Math.min(FileTailer.BOOTSTRAP_TAIL_BYTES, stat.size)
+      const start = Math.max(0, stat.size - bytesToRead)
+      const buf = Buffer.alloc(bytesToRead)
+      readSync(fd, buf, 0, bytesToRead, start)
+      closeSync(fd)
+      fd = null
+
+      let retained = buf
+      let retainedStartOffset = start
+      if (start > 0) {
+        const firstNewline = buf.indexOf(0x0a)
+        retained = firstNewline === -1 ? Buffer.alloc(0) : buf.subarray(firstNewline + 1)
+        retainedStartOffset = firstNewline === -1
+          ? stat.size
+          : start + firstNewline + 1
+      }
+
+      let lineStartOffset = retainedStartOffset
+      let cursor = 0
+      const lines: Array<{ line: string; metadata: FileTailerEntryMetadata }> = []
+      while (cursor < retained.length) {
+        const newline = retained.indexOf(0x0a, cursor)
+        if (newline === -1) break
+        const lineBytes = retained.subarray(cursor, newline)
+        const metadata = { lineStartOffset, rawLine: lineBytes.toString('utf8'), generation: this.generation }
+        lineStartOffset += lineBytes.length + 1
+        cursor = newline + 1
+        const line = lineBytes.toString('utf8').trim()
+        if (line.length > 0) lines.push({ line, metadata })
+      }
+
+      const recent = lines.slice(-maxLines)
+      for (const { line, metadata } of recent) {
+        try {
+          const obj = JSON.parse(line) as T
+          this.emitEntry(obj, metadata)
+        } catch (err) {
+          this.emitError(err as Error)
+        }
+      }
+
+      this.offset = stat.size
+      this.fileIdentity = identity
+      this.fileCtimeMs = stat.ctimeMs
+      // Preserve a trailing partial JSONL line—including a UTF-8 code point
+      // split at the bootstrap stat boundary—so the first live poll can finish
+      // it. The old bootstrap attempted JSON.parse and discarded this suffix,
+      // which made the bounded-tail path less reliable than the live path.
+      this.buffer = Buffer.from(retained.subarray(cursor))
+      this.bufferStartOffset = retainedStartOffset + cursor
+    } catch (err) {
+      if (fd !== null) {
+        try { closeSync(fd) } catch { /* best-effort */ }
+      }
+      // A generation-bound bootstrap is an authorization transaction. The
+      // caller must know synchronously that no physical tail was opened so it
+      // can retire the coordinator lease without ever publishing B's bytes.
+      if (this.expectedGenerationId) throw err
+      this.emitError(err as Error)
+    }
+  }
+
+  private readNew(throwOnInitialFailure = false): void {
+    if (this.closed || this.generationRejected) return
+    if (this.reading) {
+      // A read is in flight; queue a re-run instead of starting a
+      // concurrent stream. See the class block comment for why
+      // concurrent reads are unsafe.
+      this.pendingRead = true
+      return
+    }
+    this.reading = true
+
+    let fd: number | null = null
+    let stat: ReturnType<typeof fstatSync>
+    try {
+      // Open before fstat and give that same descriptor to the stream. An atomic rename between a
+      // path stat and createReadStream would otherwise let offset/identity describe the old inode
+      // while bytes came from the replacement.
+      fd = openSync(this.filePath, 'r')
+      stat = fstatSync(fd)
+    } catch {
+      if (fd !== null) {
+        try { closeSync(fd) } catch { /* best-effort */ }
+      }
+      // File temporarily missing — atomic-rename writers do this.
+      // Skip and wait for the next poll tick.
+      this.reading = false
+      if (throwOnInitialFailure && this.expectedGenerationId) {
+        throw new RolloutGenerationMismatchError()
+      }
+      return
+    }
+    const identity = `${stat.dev}:${stat.ino}`
+    if (this.expectedGenerationId && identity !== this.expectedGenerationId) {
+      closeSync(fd)
+      this.reading = false
+      const error = new RolloutGenerationMismatchError()
+      if (throwOnInitialFailure) throw error
+      this.generationRejected = true
+      if (this.poller !== null) clearInterval(this.poller)
+      this.poller = null
+      this.emitError(error)
+      return
+    }
+    if (
+      this.fileIdentity !== null &&
+      (
+        identity !== this.fileIdentity ||
+        stat.size < this.offset ||
+        // truncate+rewrite can return to exactly the old byte length between two polls. ctime is
+        // the only remaining evidence that the inode's contents changed at a non-growing offset.
+        (stat.size === this.offset && this.fileCtimeMs !== null && stat.ctimeMs !== this.fileCtimeMs)
+      )
+    ) {
+      // Rollouts are usually append-only, but log rotation and truncate-in-place both occur in real
+      // tooling. Offsets belong to one inode generation; carrying either the byte position or an
+      // unterminated fragment into the next generation silently skips or corrupts its first event.
+      this.generation += 1
+      this.offset = 0
+      this.buffer = Buffer.alloc(0)
+      this.bufferStartOffset = 0
+      this.generationHasErrors = false
+      this.pendingReset = { type: 'reset', generation: this.generation, snapshotByteLength: stat.size }
+    }
+    if (this.fileIdentity === null) this.pendingReset = { type: 'reset', generation: this.generation, snapshotByteLength: stat.size }
+    this.fileIdentity = identity
+    this.fileCtimeMs = stat.ctimeMs
+    this.snapshotByteLength = stat.size
+    if (stat.size <= this.offset) {
+      closeSync(fd)
+      this.reading = false
+      // Do not invoke consumer callbacks inside construction. GrokHeadless
+      // must own this tailer before a reset subscriber can dispose its session.
+      // The checkpoint key suppresses repeated no-op polling notifications.
+      queueMicrotask(() => this.emitCheckpoint())
+      // If a re-run was queued while we were between the guard and
+      // here, we still need to honor it even though this stat was a
+      // no-op — the file may have grown between the two stats.
+      if (this.pendingRead) {
+        this.pendingRead = false
+        this.readNew()
+      }
+      return
+    }
+
+    const stream = createReadStream(this.filePath, {
+      fd,
+      autoClose: true,
+      start: this.offset,
+      end: stat.size - 1,
+    })
+    this.activeStream = stream
+    let settleActiveRead!: () => void
+    this.activeRead = new Promise<void>((resolve) => { settleActiveRead = resolve })
+
+    const chunks: Buffer[] = []
+    stream.on('data', d => {
+      if (!this.closed) chunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d))
+    })
+    stream.on('end', () => {
+      if (this.closed) return
+      this.emitReset()
+      const readStartOffset = this.offset
+      const bytesRead = chunks.reduce((total, chunk) => total + chunk.length, 0)
+      this.offset = readStartOffset + bytesRead
+      if (this.offset !== stat.size) {
+        // EOF can arrive early if a writer truncates this already-open inode.
+        // Advancing to the old stat size would certify bytes never observed.
+        this.generationHasErrors = true
+        this.emitError(new Error('Transcript changed during snapshot read'))
+      }
+      if (this.buffer.length === 0) this.bufferStartOffset = readStartOffset
+      const combined = Buffer.concat([this.buffer, ...chunks])
+      let cursor = 0
+      while (cursor < combined.length) {
+        const newline = combined.indexOf(0x0a, cursor)
+        if (newline === -1) break
+        const lineBytes = combined.subarray(cursor, newline)
+        const metadata = { lineStartOffset: this.bufferStartOffset, rawLine: lineBytes.toString('utf8'), generation: this.generation }
+        this.bufferStartOffset += lineBytes.length + 1
+        cursor = newline + 1
+        const trimmed = lineBytes.toString('utf8').trim()
+        if (!trimmed) continue
+        try {
+          const obj = JSON.parse(trimmed) as T
+          this.emitEntry(obj, metadata)
+        } catch (err) {
+          this.generationHasErrors = true
+          this.emitError(err as Error)
+        }
+      }
+      // Buffer only the raw suffix after the final complete newline. Copy it so
+      // a tiny partial line does not retain the full combined read allocation.
+      this.buffer = Buffer.from(combined.subarray(cursor))
+      this.emitCheckpoint()
+    })
+    stream.on('error', err => {
+      this.generationHasErrors = true
+      if (!this.closed) this.emitError(err)
+    })
+    stream.on('close', () => {
+      this.reading = false
+      this.activeStream = null
+      this.activeRead = null
+      settleActiveRead()
+      if (!this.closed && this.pendingRead) {
+        this.pendingRead = false
+        this.readNew()
+      }
+    })
+  }
+
+  private requireExpectedGeneration(actualGenerationId: string): void {
+    if (this.expectedGenerationId &&
+      actualGenerationId !== this.expectedGenerationId) {
+      throw new RolloutGenerationMismatchError()
+    }
+  }
+
+  private emitEntry(entry: T, metadata: FileTailerEntryMetadata): void {
+    if (this.closed) return
+    try {
+      this.onEntry(entry, metadata)
+    } catch (error) {
+      // onEntry is also the provider's schema-validation boundary. A failed
+      // subscriber may have lost a row just as a decoder can reject one; do
+      // not authorize a consumer to treat either result as complete history.
+      this.generationHasErrors = true
+      this.emitError(error as Error)
+    }
+  }
+
+  private emitReset(): void {
+    if (this.closed || !this.pendingReset) return
+    const event = this.pendingReset
+    this.pendingReset = undefined
+    try { this.onSnapshot?.(event) } catch (error) { this.emitError(error as Error) }
+  }
+
+  private emitCheckpoint(): void {
+    if (this.closed) return
+    this.emitReset()
+    if (this.closed) return
+    const event: FileTailerSnapshotEvent = {
+      type: 'caught-up', generation: this.generation,
+      byteOffset: this.offset - this.buffer.length,
+      snapshotByteLength: this.snapshotByteLength,
+      complete: this.buffer.length === 0 && !this.generationHasErrors,
+    }
+    const key = JSON.stringify(event)
+    if (key === this.lastCheckpoint) return
+    this.lastCheckpoint = key
+    try { this.onSnapshot?.(event) } catch (error) { this.emitError(error as Error) }
+  }
+
+  private emitError(error: Error): void {
+    try {
+      this.onError?.(error)
+    } catch {
+      // Consumer diagnostics must not strand `reading=true`; tail ownership remains ours.
+    }
+  }
+
+  async drain(): Promise<void> {
+    // Call only after the producer exits. Stop scheduling first, await any
+    // snapshot already being read, then read one final bounded file snapshot.
+    // Closing first would discard both buffered chunks and shutdown flushes.
+    if (this.closed) return
+    if (this.poller !== null) clearInterval(this.poller)
+    this.poller = null
+    this.pendingRead = false
+    await this.activeRead
+    if (this.closed) return
+    this.readNew()
+    await this.activeRead
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) {
+      await this.activeRead
+      return
+    }
+    this.closed = true
+    if (this.poller !== null) clearInterval(this.poller)
+    this.poller = null
+    const activeRead = this.activeRead
+    this.activeStream?.destroy()
+    // WHY close awaits the stream boundary: callers replace sessions by closing the old tailer and
+    // then trusting that no old callback can mutate the new session. Merely destroying the stream
+    // schedules close asynchronously and leaves a post-close callback race.
+    await activeRead
+  }
+}
+
+export type JsonlEntry = Record<string, unknown>
+
+/**
+ * Watches a CC project directory for the JSONL file CC creates when the
+ * session starts, then tails it. Use case:
+ *
+ *   1. The consumer spawns `claude` with cwd=X
+ *   2. Before/right after spawn, we call `tailNewSessionFile(projectDir, ...)`
+ *   3. CC creates ~/.claude/projects/<sanitized-cwd>/<sessionId>.jsonl
+ *   4. The tailer notices the new .jsonl, opens it, and starts emitting entries
+ *
+ * Returns a stop() function that tears down both the directory watcher
+ * and the file tailer.
+ */
+export async function tailNewSessionFile(
+  projectDir: string,
+  onEntry: (entry: JsonlEntry, file: string) => void,
+  onError?: (err: Error) => void,
+): Promise<() => Promise<void>> {
+  // Ensure the directory exists. CC creates it on first write but we want
+  // to attach the watcher BEFORE CC is spawned so we can't miss the create
+  // event. mkdir -p is harmless if it already exists.
+  await mkdir(projectDir, { recursive: true })
+
+  // Snapshot the existing files so we can ignore them and only pick up
+  // a NEW jsonl produced by the session we're about to start.
+  const existing = new Set<string>()
+  try {
+    for (const name of await readdir(projectDir)) {
+      if (name.endsWith('.jsonl')) existing.add(name)
+    }
+  } catch (err) {
+    onError?.(err as Error)
+  }
+
+  let tailer: FileTailer<JsonlEntry> | null = null
+
+  const dirWatcher = watch(projectDir, {
+    persistent: true,
+    ignoreInitial: true,
+    depth: 0,
+    awaitWriteFinish: false,
+  })
+
+  dirWatcher.on('add', filePath => {
+    const name = basename(filePath)
+    if (!name.endsWith('.jsonl')) return
+    if (existing.has(name)) return
+    if (tailer) return // Already tailing the first new session file
+    tailer = new FileTailer<JsonlEntry>(
+      filePath,
+      entry => onEntry(entry, filePath),
+      onError,
+    )
+  })
+
+  dirWatcher.on('error', err => onError?.(err as Error))
+
+  return async () => {
+    await dirWatcher.close()
+    if (tailer) await tailer.close()
+  }
+}
+
+/**
+ * Convenience for tailing a specific session file by absolute path
+ * (when the file is already known).
+ */
+export function tailSessionFile<T extends JsonlEntry = JsonlEntry>(
+  filePath: string,
+  onEntry: (entry: T, metadata: FileTailerEntryMetadata) => void,
+  onError?: (err: Error) => void,
+  options?: FileTailerOptions,
+): () => Promise<void> {
+  const tailer = new FileTailer<T>(filePath, onEntry, onError, options)
+  return async () => {
+    await tailer.close()
+  }
+}

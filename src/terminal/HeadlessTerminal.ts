@@ -1,0 +1,700 @@
+import { EventEmitter } from 'events'
+import type { IPty } from 'node-pty'
+import xtermHeadless from '@xterm/headless'
+
+const { Terminal } = xtermHeadless
+type TerminalInstance = InstanceType<typeof Terminal>
+
+// HeadlessTerminal — wraps @xterm/headless around a consumer-owned PTY.
+//
+// The consumer spawns the PTY (they own the binary, args, env, cwd)
+// and passes the IPty instance here. We pipe its output into a
+// headless Terminal, emit throttled screen snapshots, and accept
+// write-through keystrokes. No process management — we never spawn
+// or kill anything.
+//
+// This is the foundation primitive both claude-code-headless and
+// codex-headless build on.
+//
+// --- Lifecycle ---------------------------------------------------------------
+//
+// The constructor is INERT. It builds the headless xterm but does NOT
+// subscribe to PTY events. The consumer is expected to call attach()
+// after any other state that depends on PTY events (transcript tailers,
+// log captures, recorders) has been wired up. Without this split, the
+// PTY started emitting bytes as soon as `new HeadlessTerminal(...)`
+// returned, which made the "tailer attached before terminal starts
+// processing PTY data" invariant a polite fiction. Now it's enforceable:
+// the terminal mirror does nothing until you call attach().
+//
+// --- write() race fix --------------------------------------------------------
+//
+// xterm's term.write() is async — the documented contract says the
+// optional callback fires once the data has been fully parsed into the
+// buffer. A naive implementation that calls term.write(data) and then
+// schedules a snapshot on a setTimeout will race: the snapshot can fire
+// before the buffer reflects the bytes we just wrote. Our previous
+// implementation had this bug, and the testing/replay.ts script papered
+// over it with a 50ms sleep. Now we explicitly use the callback as the
+// signal to schedule a flush, so each snapshot is guaranteed to reflect
+// every PTY byte that was already written.
+//
+// --- Viewport vs. full buffer ------------------------------------------------
+//
+// "Current screen" parsers (slash picker, trust dialog, activity,
+// streaming text, in-progress assistant) all want the visible viewport
+// only — what the user is looking at right now. Iterating buf.length
+// includes 10k rows of scrollback, which means stale prompts, stale
+// pickers, and stale assistant text from earlier turns leak into the
+// "current state" parsers. snapshotPlain / snapshotMarkdown now scan
+// the viewport region only (viewportY .. viewportY + term.rows). The
+// scrollback is still kept in the xterm buffer for users who want to
+// scroll back in the consumer UI; it just isn't fed to the parsers.
+
+export type HeadlessTerminalOptions = {
+  /** The PTY instance to attach to. Consumer owns its lifecycle. */
+  pty: IPty
+  /** Terminal columns. Default 120. */
+  cols?: number
+  /** Terminal rows. Default 40. */
+  rows?: number
+  /** Throttle interval in ms for screen snapshots. Default 100 (~10Hz).
+   *
+   *  WHY 100 and not the old 16 (~60Hz): the 'screen' event is a
+   *  monitoring/parsing surface, not a display path — the real
+   *  terminal pane renders from raw PTY data in the consumer. Every
+   *  snapshot builds four buffer serializations (two of which are
+   *  per-cell JS walks over ~200 rows, see terminalToMarkdown) and
+   *  triggers every downstream parser + IPC forward. At 16ms with ~10
+   *  concurrent live sessions this allocated hundreds of MB/s of
+   *  garbage in Agent Code's main process; the resulting V8 major-GC
+   *  storm pinned ~80% CPU with the heap oscillating 46MB↔1.2GB
+   *  (agent-code#390). Nothing that consumes 'screen' needs better
+   *  than ~10Hz: picker/trust/permission detection, activity status,
+   *  and streaming-card extraction are all human-timescale, and
+   *  paste-confirmation waits have multi-second timeouts. */
+  snapshotIntervalMs?: number
+}
+
+export type ScreenSnapshot = {
+  /** Visible viewport as plain text. Source of truth for "current
+   *  screen" parsers (trust dialog, slash picker, activity spinner,
+   *  compaction banner, resume prompt). Anything that asks "what is
+   *  CC showing right now?" reads this. */
+  plain: string
+  /** Viewport with bold/italic reconstructed as markdown syntax.
+   *  Same row range as `plain`. */
+  markdown: string
+  /** A wider window (default last ~200 rows including scrollback)
+   *  intended for content extractors that must walk past the visible
+   *  area — most importantly extractAssistantInProgress, which
+   *  scans bottom-up for the `⏺` marker. CC's streaming responses
+   *  often grow taller than the viewport, scrolling the opening
+   *  marker into scrollback; without this wider snapshot the
+   *  streaming card stayed blank for long replies. Parsers should
+   *  prefer `plain` unless they specifically need history. */
+  recent: string
+  /** Same wider window with markdown emphasis reconstructed. Mirror
+   *  of `recent` for renderers that want the bold/italic preserved. */
+  recentMarkdown: string
+}
+
+export type StableTerminalRow = {
+  /** Attribute-blind text for semantic matching, trimmed only on the right. */
+  text: string
+  /** Physical cell symbols preserve row geometry without exposing xterm mutability. */
+  cells: readonly string[]
+  /** Native xterm wrap bit; false for rows painted explicitly by a TUI. */
+  isWrapped: boolean
+  /**
+   * Provider-parse generation in which this physical viewport row's cells last
+   * changed. Undefined only on compatibility frames constructed outside the
+   * live terminal mirror.
+   */
+  paintGeneration?: number
+}
+
+export type StableTerminalFrame = {
+  /** Monotonic generation advanced only after xterm has parsed a PTY chunk. */
+  generation: number
+  /** Geometry epoch currently applied to xterm. */
+  layoutEpoch: number
+  /**
+   * Latest geometry epoch for which a post-resize provider chunk was parsed.
+   * A mismatch means xterm has reinterpreted an older paint at new dimensions.
+   */
+  providerLayoutEpoch: number
+  /** Parsed generation current when the active terminal geometry began. */
+  layoutStartGeneration?: number
+  /**
+   * Provider-parse generation in which the logical cursor position last
+   * changed. Undefined only on compatibility frames constructed by callers.
+   */
+  cursorPaintGeneration?: number
+  cols: number
+  rows: readonly StableTerminalRow[]
+  cursor: Readonly<{ x: number; y: number }>
+}
+
+type TerminalPaintState = {
+  rows: readonly {
+    cells: readonly string[]
+    isWrapped: boolean
+  }[]
+  cursor: Readonly<{ x: number; y: number }>
+}
+
+function paintRowsEqual(
+  left: TerminalPaintState['rows'][number] | undefined,
+  right: TerminalPaintState['rows'][number] | undefined,
+): boolean {
+  if (!left || !right || left.isWrapped !== right.isWrapped ||
+    left.cells.length !== right.cells.length) return false
+  return left.cells.every((cell, index) => cell === right.cells[index])
+}
+
+export type HeadlessTerminalEvents = {
+  /** Raw PTY bytes received. Use for recording/fidelity. */
+  'pty-data': [string]
+  /** Throttled dual-snapshot of the terminal viewport. */
+  screen: [ScreenSnapshot]
+  /** PTY child exited. */
+  exit: [{ exitCode: number; signal?: number }]
+}
+
+export interface HeadlessTerminal {
+  on<K extends keyof HeadlessTerminalEvents>(
+    event: K,
+    listener: (...args: HeadlessTerminalEvents[K]) => void,
+  ): this
+  off<K extends keyof HeadlessTerminalEvents>(
+    event: K,
+    listener: (...args: HeadlessTerminalEvents[K]) => void,
+  ): this
+  emit<K extends keyof HeadlessTerminalEvents>(
+    event: K,
+    ...args: HeadlessTerminalEvents[K]
+  ): boolean
+}
+
+// --- Markdown reconstruction helpers ---
+
+function emphasisMarker(bold: boolean, italic: boolean): string {
+  if (bold && italic) return '***'
+  if (bold) return '**'
+  if (italic) return '*'
+  return ''
+}
+
+/**
+ * Pure function: walk a Terminal's active buffer and reconstruct
+ * markdown from cell SGR attributes. Bold cells get **wrapped**,
+ * italic cells get *wrapped*, both get ***wrapped***.
+ *
+ * Why: agents use chalk to render markdown as ANSI. By the time it
+ * hits the terminal, `**bold**` is gone — replaced by SGR bold
+ * attributes on each cell. translateToString drops those attributes.
+ * This function reads them back and re-emits markdown markers.
+ *
+ * Iterates the viewport only by default (the visible rows). Pass
+ * `{ fullBuffer: true }` to walk the entire scrollback — useful for
+ * recording / replay tooling that wants the complete history, but
+ * NOT for "current screen" parsers which would otherwise pick up
+ * stale formatting from earlier turns.
+ */
+export function terminalToMarkdown(
+  term: TerminalInstance,
+  opts: { fullBuffer?: boolean; recentRows?: number } = {},
+): string {
+  const buf = term.buffer.active
+  const out: string[] = []
+
+  const cell = (buf as { getNullCell?: () => unknown }).getNullCell?.() as
+    | { isBold(): number; isItalic(): number; getChars(): string }
+    | undefined
+
+  // Three windowing modes:
+  //   - fullBuffer: walk every row including all scrollback.
+  //   - recentRows: walk the last N rows from the bottom of the
+  //     buffer. Used for streaming extraction where we need history
+  //     past the visible viewport but not all the way back.
+  //   - default: viewport-only (current visible rows).
+  const start = opts.fullBuffer
+    ? 0
+    : opts.recentRows !== undefined
+      ? Math.max(0, buf.length - opts.recentRows)
+      : buf.viewportY
+  const end = opts.fullBuffer || opts.recentRows !== undefined
+    ? buf.length
+    : Math.min(buf.length, buf.viewportY + term.rows)
+
+  for (let y = start; y < end; y++) {
+    const line = buf.getLine(y)
+    if (!line) {
+      out.push('')
+      continue
+    }
+
+    let row = ''
+    let inBold = false
+    let inItalic = false
+
+    for (let x = 0; x < line.length; x++) {
+      const c = (cell ? line.getCell(x, cell as never) : line.getCell(x)) ?? null
+      if (!c) continue
+      const chars = c.getChars() || ' '
+      const nextBold = c.isBold() !== 0
+      const nextItalic = c.isItalic() !== 0
+
+      if (nextBold !== inBold || nextItalic !== inItalic) {
+        row += emphasisMarker(inBold, inItalic)
+        row += emphasisMarker(nextBold, nextItalic)
+        inBold = nextBold
+        inItalic = nextItalic
+      }
+
+      row += chars
+    }
+
+    row += emphasisMarker(inBold, inItalic)
+    out.push(row.replace(/[ \t]+$/, ''))
+  }
+
+  while (out.length > 0 && out[out.length - 1] === '') out.pop()
+  return out.join('\n')
+}
+
+// --- HeadlessTerminal class ---
+
+export class HeadlessTerminal extends EventEmitter {
+  private readonly pty: IPty
+  private readonly term: TerminalInstance
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private flushPending = false
+  // Accumulates PTY bytes whose write callback hasn't fired yet. We
+  // could have multiple parses in flight after rapid PTY chunks; we
+  // only schedule a flush once the *latest* write completes, so we
+  // don't snapshot a half-parsed buffer. See attach() for the use.
+  private pendingWrites = 0
+  private parsedFrameGeneration = 0
+  private layoutEpoch = 0
+  private providerLayoutEpoch = 0
+  private layoutStartGeneration = 0
+  private rowPaintGenerations: number[]
+  private cursorPaintGeneration = 0
+  private lastProviderPaintState: TerminalPaintState
+  private exited = false
+  private attached = false
+  private readonly snapshotIntervalMs: number
+  // Stored disposables for the PTY listeners we wire in attach(). node-pty's
+  // onData / onExit return objects with .dispose() — if we drop them on the
+  // floor (as the previous implementation did) the listeners survive every
+  // dispose() call and accumulate over the process lifetime.
+  private ptyDataDisposable: { dispose: () => void } | null = null
+  private ptyExitDisposable: { dispose: () => void } | null = null
+  // Last emitted snapshot text, kept so scheduleFlush() can skip the
+  // whole emit when nothing the consumer can see has changed. See the
+  // WHY block inside scheduleFlush(). A few KB retained per session —
+  // negligible next to the churn it prevents.
+  private lastEmittedPlain: string | null = null
+  private lastEmittedRecent: string | null = null
+
+  constructor(options: HeadlessTerminalOptions) {
+    super()
+    this.pty = options.pty
+    this.snapshotIntervalMs = options.snapshotIntervalMs ?? 100
+
+    const cols = options.cols ?? 120
+    const rows = options.rows ?? 40
+
+    this.term = new Terminal({
+      cols,
+      rows,
+      allowProposedApi: true,
+      scrollback: 10000,
+    })
+    this.rowPaintGenerations = Array.from({ length: rows }, () => 0)
+    this.lastProviderPaintState = this.capturePaintState()
+    // NOTE: no PTY subscription here. Consumers must call attach()
+    // after they've wired up everything that depends on PTY data
+    // (transcript tailers, recorders). See file header.
+  }
+
+  /**
+   * Subscribe to PTY events and start mirroring data into the headless
+   * terminal. Idempotent — calling attach() twice is a no-op.
+   *
+   * Why this isn't done in the constructor: PTY data starts flowing
+   * immediately once we subscribe. If a consumer needs to attach a
+   * transcript tailer first (so it sees the very first JSONL entries
+   * an agent emits), they need the freedom to wire that up before
+   * the mirror activates.
+   */
+  attach(): void {
+    if (this.attached) return
+    this.attached = true
+
+    this.ptyDataDisposable = this.pty.onData((data: string) => {
+      this.emit('pty-data', data)
+      // term.write is async — the callback fires once the bytes have
+      // been parsed into the buffer. Schedule the flush from inside
+      // the callback so snapshots always reflect already-parsed bytes.
+      this.pendingWrites++
+      // WHY the callback can run after resize even when this chunk arrived
+      // before resize. Capturing the epoch at admission prevents those old
+      // bytes from blessing xterm's new geometry merely because parsing was
+      // asynchronous.
+      const admittedLayoutEpoch = this.layoutEpoch
+      this.term.write(data, () => {
+        this.pendingWrites--
+        this.parsedFrameGeneration++
+        const parsedPaintState = this.capturePaintState()
+        if (admittedLayoutEpoch === this.layoutEpoch) {
+          this.recordProviderPaint(
+            this.parsedFrameGeneration,
+            this.lastProviderPaintState,
+            parsedPaintState,
+          )
+          this.providerLayoutEpoch = Math.max(
+            this.providerLayoutEpoch,
+            admittedLayoutEpoch,
+          )
+        }
+        // WHY even a pre-resize chunk that finishes late changes the buffer
+        // against which the next admitted chunk must be compared. It cannot
+        // receive current-layout paint authority, but omitting it from the
+        // baseline would make a later status byte inherit changes it did not
+        // produce and falsely mark unrelated rows as freshly painted.
+        this.lastProviderPaintState = parsedPaintState
+        // Only schedule when there are no more pending parses.
+        // Otherwise rapid PTY chunks would each schedule a flush
+        // and we'd snapshot mid-parse. The throttle inside
+        // scheduleFlush() coalesces multiple completions into one
+        // snapshot per snapshotIntervalMs window.
+        if (this.pendingWrites === 0) this.scheduleFlush()
+      })
+    })
+
+    this.ptyExitDisposable = this.pty.onExit(({ exitCode, signal }) => {
+      this.exited = true
+      this.emit('exit', { exitCode, signal })
+      this.cleanup()
+    })
+  }
+
+  /** Write raw bytes to the PTY. Used for keystroke synthesis. */
+  write(data: string): void {
+    this.pty.write(data)
+  }
+
+  /** Resize both the PTY and the headless terminal in lockstep. */
+  resize(cols: number, rows: number): void {
+    if (cols === this.term.cols && rows === this.term.rows) return
+    try {
+      this.pty.resize(cols, rows)
+      this.term.resize(cols, rows)
+      // WHY xterm reflows immediately, while Codex redraws asynchronously
+      // after receiving SIGWINCH. Until a later provider chunk is parsed, the
+      // buffer contains old provider rows under new column semantics. Keeping
+      // that interval explicit prevents prompt evidence from manufacturing a
+      // logical newline out of a formerly soft-wrapped draft.
+      this.layoutEpoch++
+      this.layoutStartGeneration = this.parsedFrameGeneration
+      // xterm has already reinterpreted every cell at the new geometry, but no
+      // provider byte caused those physical rows. Resetting each row/cursor to
+      // the layout-start fence makes subsequent evidence local: only cells or
+      // cursor positions that actually change in a later provider parse can
+      // cross it. A byte that updates status chrome advances only that row.
+      this.rowPaintGenerations = Array.from(
+        { length: this.term.rows },
+        () => this.layoutStartGeneration,
+      )
+      this.cursorPaintGeneration = this.layoutStartGeneration
+      this.lastProviderPaintState = this.capturePaintState()
+    } catch {
+      // node-pty throws on 0/negative dims during transient layouts.
+    }
+  }
+
+  /**
+   * Capture the current visible viewport as plain text. Iterates only
+   * `term.rows` lines starting at `buffer.viewportY` — scrollback is
+   * intentionally excluded, see file header for the why.
+   */
+  snapshotPlain(): string {
+    const buf = this.term.buffer.active
+    const start = buf.viewportY
+    const end = Math.min(buf.length, buf.viewportY + this.term.rows)
+    const lines: string[] = []
+    for (let i = start; i < end; i++) {
+      const line = buf.getLine(i)
+      lines.push(line ? line.translateToString(true) : '')
+    }
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    return lines.join('\n')
+  }
+
+  /**
+   * Capture an immutable, cell-structured viewport only after xterm has parsed
+   * every PTY chunk currently in flight.
+   *
+   * WHY prompt ownership cannot use `snapshotPlain()`: a string has no stable
+   * generation and invites searches across transcript history. Returning null
+   * during parsing makes callers fail closed, while physical rows/cells let the
+   * provider adapter inspect only the current bottom composer and footer.
+   */
+  snapshotStableFrame(): StableTerminalFrame | null {
+    if (this.pendingWrites !== 0) return null
+
+    const buffer = this.term.buffer.active
+    const rows: StableTerminalRow[] = []
+    for (let viewportRow = 0; viewportRow < this.term.rows; viewportRow += 1) {
+      const line = buffer.getLine(buffer.viewportY + viewportRow)
+      const cells: string[] = []
+      for (let column = 0; column < this.term.cols; column += 1) {
+        cells.push(line?.getCell(column)?.getChars() ?? '')
+      }
+      rows.push(Object.freeze({
+        text: line?.translateToString(true) ?? '',
+        cells: Object.freeze(cells),
+        isWrapped: line?.isWrapped ?? false,
+        paintGeneration: this.rowPaintGenerations[viewportRow] ??
+          this.layoutStartGeneration,
+      }))
+    }
+
+    const absoluteCursorY = buffer.baseY + buffer.cursorY
+    return Object.freeze({
+      generation: this.parsedFrameGeneration,
+      layoutEpoch: this.layoutEpoch,
+      providerLayoutEpoch: this.providerLayoutEpoch,
+      layoutStartGeneration: this.layoutStartGeneration,
+      cursorPaintGeneration: this.cursorPaintGeneration,
+      cols: this.term.cols,
+      rows: Object.freeze(rows),
+      cursor: Object.freeze({
+        x: buffer.cursorX,
+        y: absoluteCursorY - buffer.viewportY,
+      }),
+    })
+  }
+
+  /**
+   * Capture only provider-neutral physical facts used to attribute paint.
+   * There is deliberately no Codex composer knowledge here: a terminal can say
+   * which rows/cursor changed, while the provider adapter alone decides which
+   * of those rows constitute an input surface.
+   */
+  private capturePaintState(): TerminalPaintState {
+    const buffer = this.term.buffer.active
+    const rows: Array<{ cells: readonly string[]; isWrapped: boolean }> = []
+    for (let viewportRow = 0; viewportRow < this.term.rows; viewportRow += 1) {
+      const line = buffer.getLine(buffer.viewportY + viewportRow)
+      const cells: string[] = []
+      for (let column = 0; column < this.term.cols; column += 1) {
+        cells.push(line?.getCell(column)?.getChars() ?? '')
+      }
+      rows.push({ cells, isWrapped: line?.isWrapped ?? false })
+    }
+    const absoluteCursorY = buffer.baseY + buffer.cursorY
+    return {
+      rows,
+      cursor: {
+        x: buffer.cursorX,
+        y: absoluteCursorY - buffer.viewportY,
+      },
+    }
+  }
+
+  private recordProviderPaint(
+    generation: number,
+    before: TerminalPaintState,
+    after: TerminalPaintState,
+  ): void {
+    for (let row = 0; row < after.rows.length; row += 1) {
+      if (!paintRowsEqual(before.rows[row], after.rows[row])) {
+        this.rowPaintGenerations[row] = generation
+      }
+    }
+    if (before.cursor.x !== after.cursor.x || before.cursor.y !== after.cursor.y) {
+      this.cursorPaintGeneration = generation
+    }
+  }
+
+  /** Capture the viewport with bold/italic reconstructed as markdown. */
+  snapshotMarkdown(): string {
+    return terminalToMarkdown(this.term)
+  }
+
+  /**
+   * Capture the last `rows` lines of the buffer (viewport + recent
+   * scrollback). Default 200 — enough to cover Claude responses that
+   * scroll the opening `⏺` marker out of the visible viewport, while
+   * staying small enough to keep parser walks cheap. Streaming
+   * extractors call this; "current screen" parsers stick with
+   * snapshotPlain().
+   */
+  snapshotRecent(rows = 200): string {
+    const buf = this.term.buffer.active
+    const start = Math.max(0, buf.length - rows)
+    const lines: string[] = []
+    for (let i = start; i < buf.length; i++) {
+      const line = buf.getLine(i)
+      lines.push(line ? line.translateToString(true) : '')
+    }
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    return lines.join('\n')
+  }
+
+  /** Markdown-reconstructed counterpart of snapshotRecent. */
+  snapshotRecentMarkdown(rows = 200): string {
+    return terminalToMarkdown(this.term, { recentRows: rows })
+  }
+
+  /** Capture the entire xterm buffer (scrollback + viewport) as plain
+   *  text. Use for recording / archival; not for "current screen"
+   *  parsers — they should call snapshotPlain() instead. */
+  snapshotFullBuffer(): string {
+    const buf = this.term.buffer.active
+    const lines: string[] = []
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i)
+      lines.push(line ? line.translateToString(true) : '')
+    }
+    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+    return lines.join('\n')
+  }
+
+  /**
+   * Direct access to the headless Terminal instance for cell-level
+   * attribute reads (e.g. slash picker fg color detection). Read-only.
+   */
+  getTerminal(): TerminalInstance {
+    return this.term
+  }
+
+  /** True if the PTY has exited. */
+  isExited(): boolean {
+    return this.exited
+  }
+
+  /** Detach from the PTY and clean up timers. Does NOT kill the PTY
+   *  — the consumer owns its lifecycle. */
+  dispose(): void {
+    this.cleanup()
+  }
+
+  // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  //
+  // KNOWN ISSUE: the 'screen' event can stall under synchronized output
+  //
+  // (Back-ported from claude-code-headless's copy of this file, where the
+  // bug was discovered and documented — the two copies had drifted and this
+  // operational knowledge was lost here. See agent-code#394 §8.)
+  //
+  // TUIs that use the synchronized-output protocol wrap redraws in
+  // `\x1b[?2026h … \x1b[?2026l` so the terminal renders the new frame
+  // atomically. `@xterm/headless` parses those sequences correctly into
+  // the buffer, but its `write(data, cb)` callback timing is influenced
+  // by them: under sustained sync-output pressure the per-chunk callbacks
+  // can land in a way that leaves `pendingWrites` > 0 indefinitely, so
+  // `scheduleFlush()` is never re-armed and consumers stop receiving
+  // 'screen' events even though the buffer is being updated correctly.
+  //
+  // This was discovered against Claude Code's TUI (see the paste-submit
+  // reproduction harness at Agent Code's
+  // `vendor/in_progress/paste-submit-repro/`), but the mechanism lives in
+  // the shared pendingWrites/write-callback pattern below, which this
+  // copy shares byte-for-byte — Codex's TUI also emits synchronized
+  // output, so the same stall is possible here.
+  //
+  // What this means for consumers:
+  //   * If you only need a periodic snapshot for diagnostics or parsing,
+  //     prefer a fixed-interval poll of `snapshotPlain()` /
+  //     `snapshotMarkdown()` over subscribing to 'screen'.
+  //   * If you DO subscribe to 'screen' for low-latency reaction, you
+  //     MUST also have a wall-clock timeout fallback because the event
+  //     may never fire in this session.
+  //
+  // A real fix would be either: drop the pendingWrites counter and
+  // schedule a flush on every `pty.onData` (cheap, more events but no
+  // stalls); or replace the @xterm/headless callback mechanism with our
+  // own write→parse barrier.
+  //
+  // ---------------------------------------------------------------------------
+
+  private scheduleFlush(): void {
+    if (this.flushPending) return
+    this.flushPending = true
+    this.flushTimer = setTimeout(() => {
+      this.flushPending = false
+      this.flushTimer = null
+      // Change gate: build only the two CHEAP serializations first
+      // (translateToString is native xterm code) and bail before the
+      // expensive work when the text is identical to what we last
+      // emitted.
+      //
+      // WHY this exists: agent TUIs redraw their composer/spinner
+      // chrome continuously while "working", so PTY data flows — and
+      // re-arms this flush — even when the visible text is unchanged
+      // frame after frame. Before this gate, every such frame paid
+      // for two per-cell markdown walks (terminalToMarkdown over
+      // viewport + ~200 recent rows), the downstream parsers, the
+      // event emissions, and an IPC forward of four strings. With ~10
+      // live sessions that was the dominant allocation source in
+      // Agent Code's main process (GC storm, agent-code#390). The
+      // renderer already had a bail-out for identical frames; gating
+      // here means main stops paying to produce frames the renderer
+      // was discarding anyway.
+      //
+      // WHY compare BOTH plain and recent: plain is viewport-only. A
+      // program spewing identical lines can scroll new content into
+      // scrollback while the viewport text stays byte-identical;
+      // comparing `recent` (last ~200 rows) too keeps the streaming
+      // extractors' window honest. If all 200 recent rows are
+      // byte-identical, the extractors would see identical input
+      // anyway, so skipping is safe by construction.
+      //
+      // KNOWN TRADEOFF: attribute-only changes (e.g. a cell flips
+      // bold with identical characters) no longer produce a snapshot,
+      // because both gate strings are attribute-blind. Every current
+      // consumer keys off text content or reads the live grid via
+      // getTerminal(), so nothing observable regresses; revisit if a
+      // consumer ever needs attribute-driven cadence.
+      const plain = this.snapshotPlain()
+      const recent = this.snapshotRecent()
+      if (plain === this.lastEmittedPlain && recent === this.lastEmittedRecent) {
+        return
+      }
+      this.lastEmittedPlain = plain
+      this.lastEmittedRecent = recent
+      this.emit('screen', {
+        plain,
+        markdown: this.snapshotMarkdown(),
+        recent,
+        recentMarkdown: this.snapshotRecentMarkdown(),
+      })
+    }, this.snapshotIntervalMs)
+  }
+
+  private cleanup(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+    this.flushPending = false
+    // Tear down PTY listeners. node-pty disposables are idempotent —
+    // calling dispose() after the PTY has already exited is safe.
+    if (this.ptyDataDisposable) {
+      try { this.ptyDataDisposable.dispose() } catch { /* idempotent */ }
+      this.ptyDataDisposable = null
+    }
+    if (this.ptyExitDisposable) {
+      try { this.ptyExitDisposable.dispose() } catch { /* idempotent */ }
+      this.ptyExitDisposable = null
+    }
+    this.attached = false
+  }
+}

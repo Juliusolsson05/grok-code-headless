@@ -10,9 +10,10 @@
 // able to re-emit items it does not fully interpret (backend_tool_call inner
 // shapes, future fields) without corrupting sessions — serde on the grok side
 // ignores unknown fields, but DROPPING them would still bust the Responses
-// API prefix cache and lose hosted-tool evidence. decode() therefore keeps
-// the parsed object verbatim; encode() stringifies it back with key order
-// intact, which is byte-stable for serde's compact output.
+// API prefix cache and lose hosted-tool evidence. Decoded records retain
+// their original line: JSON.parse/stringify alone loses float spelling and
+// large integer precision. Pass the decoded record for exact archive replay;
+// pass a newly constructed item when intentionally projecting new content.
 
 export const GROK_CONVERSATION_ITEM_TYPES = [
   'system',
@@ -36,34 +37,40 @@ export type GrokSyntheticReason =
   | 'length_continue'
   | 'project_instructions'
   | 'auto_continue'
+  | 'auto_recovery'
+  | 'interjection'
   | 'agent_message'
+  | 'parent_agent_message'
+  | 'task_completed'
+  | 'subagent_completed'
+  | 'notification_drain'
+  | 'goal_summary'
+  | 'goal_classifier_nudge'
+  | 'scheduler_fired'
+  | 'stop_hook_feedback'
+  | 'working_directory_switch'
   | 'unknown'
+  | (string & {})
 
 export interface GrokTextPart {
   type: 'text'
   text: string
 }
 
-// Image parts were not present in any captured fixture; the exact inner
-// field names are therefore NOT asserted. Passthrough keeps round-trips
-// lossless until a real image-bearing session is captured (Task 2 follow-up
-// note in the plan). Content is OpenAI-shaped per the sampler source.
+// ContentPart::Image { url } in the upstream serde contract. This is not
+// the Responses API input_image shape used later on the network boundary.
 export interface GrokImagePart {
   type: 'image'
+  url: string
   [key: string]: unknown
 }
 
 export type GrokContentPart = GrokTextPart | GrokImagePart
 
-export interface GrokToolCallFunction {
-  name: string
-  arguments: string
-}
-
 export interface GrokToolCall {
   id: string
-  type: 'function'
-  function: GrokToolCallFunction
+  name: string
+  arguments: string
   [key: string]: unknown
 }
 
@@ -76,10 +83,10 @@ export interface GrokSystemItem {
 export interface GrokUserItem {
   type: 'user'
   content: GrokContentPart[]
-  synthetic_reason?: GrokSyntheticReason
-  cwd_generation?: number
-  prior_turn_interrupt?: string
-  prompt_index?: number
+  synthetic_reason?: GrokSyntheticReason | null
+  cwd_generation?: number | null
+  prior_turn_interrupt?: string | null
+  prompt_index?: number | null
   [key: string]: unknown
 }
 
@@ -116,7 +123,7 @@ export interface GrokBackendToolCallItem {
 // conversation.rs). id/summary are the fields grok itself emits today.
 export interface GrokReasoningItem {
   type: 'reasoning'
-  id?: string
+  id?: string | null
   summary?: Array<{ type: string; text: string }>
   [key: string]: unknown
 }
@@ -130,9 +137,10 @@ export type GrokConversationItem =
   | GrokReasoningItem
 
 export type DecodedGrokItem = {
-  item: GrokConversationItem
-  /** The original line, for byte-stable re-encode and forensic diffs. */
-  raw: string
+  /** Parsed view; edits do not change the captured evidence in raw. */
+  readonly item: GrokConversationItem
+  /** Immutable capture. To project edits, encode the item, not this wrapper. */
+  readonly raw: string
 }
 
 export class GrokConversationItemDecodeError extends Error {
@@ -143,38 +151,70 @@ export class GrokConversationItemDecodeError extends Error {
 }
 
 export function decodeGrokConversationItem(line: string): DecodedGrokItem {
-  const item = JSON.parse(line) as GrokConversationItem
-  if (
-    typeof item !== 'object' ||
-    item === null ||
-    !GROK_CONVERSATION_ITEM_TYPES.includes(item.type)
-  ) {
-    // Fail loud, not lenient: an unknown type tag means upstream changed the
-    // schema and every consumer (codec, fold policy, switching) must be
-    // re-verified against a fresh capture — silently skipping lines is how
-    // transcripts lose turns forever.
-    throw new GrokConversationItemDecodeError(
-      `unknown ConversationItem type tag: ${String((item as { type?: unknown })?.type)}`,
-    )
+  let item: unknown
+  try {
+    item = JSON.parse(line)
+  } catch {
+    throw new GrokConversationItemDecodeError('Invalid ConversationItem JSON')
   }
-  return { item, raw: line }
+  const record = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+  const parts = (value: unknown): boolean => Array.isArray(value) && value.every(part =>
+    record(part) && ((part.type === 'text' && typeof part.text === 'string') ||
+      (part.type === 'image' && typeof part.url === 'string')))
+  const calls = (value: unknown): boolean => Array.isArray(value) && value.every(call =>
+    record(call) && typeof call.id === 'string' && typeof call.name === 'string' &&
+    typeof call.arguments === 'string')
+  const optionalCounter = (value: unknown): boolean =>
+    value == null || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)
+  let valid = false
+  if (record(item)) {
+    switch (item.type) {
+      case 'system': valid = typeof item.content === 'string'; break
+      case 'user':
+        valid = parts(item.content) &&
+          (item.synthetic_reason == null || typeof item.synthetic_reason === 'string') &&
+          (item.prior_turn_interrupt == null || typeof item.prior_turn_interrupt === 'string') &&
+          optionalCounter(item.prompt_index) && optionalCounter(item.cwd_generation)
+        break
+      case 'assistant':
+        valid = typeof item.content === 'string' &&
+          (item.tool_calls === undefined || calls(item.tool_calls))
+        break
+      case 'tool_result':
+        valid = typeof item.tool_call_id === 'string' && typeof item.content === 'string' &&
+          (item.images === undefined || parts(item.images))
+        break
+      case 'backend_tool_call':
+        valid = record(item.kind) && typeof item.kind.tool_type === 'string'
+        break
+      case 'reasoning':
+        valid = (item.id == null || typeof item.id === 'string') &&
+          (item.summary === undefined || (Array.isArray(item.summary) &&
+          item.summary.every(part => record(part) && typeof part.type === 'string' && typeof part.text === 'string')))
+        break
+    }
+  }
+  if (!valid) {
+    // Report only a bounded discriminator, never arbitrary prompt/tool data.
+    const kind = record(item) && typeof item.type === 'string' ? item.type.slice(0, 80) : 'missing'
+    throw new GrokConversationItemDecodeError(`Invalid ConversationItem structure (type=${kind})`)
+  }
+  return { item: item as GrokConversationItem, raw: line }
 }
 
-export function encodeGrokConversationItem(item: GrokConversationItem): string {
-  // JSON.stringify preserves insertion order of parsed keys, and serde's
-  // compact output matches stringify's default spacing — so parsed→stringify
-  // is byte-stable. Constructed items (projection) simply stringify as-is.
+export function encodeGrokConversationItem(item: GrokConversationItem | DecodedGrokItem): string {
+  if (!('type' in item)) return item.raw
   return JSON.stringify(item)
 }
 
 export function isGenuineUserItem(item: GrokConversationItem): item is GrokUserItem {
-  // synthetic_reason is THE discriminator between a real user turn and a
-  // runtime injection (compaction carrier, system reminder, project
-  // instructions). Treating injected items as user turns is the grok
-  // equivalent of Claude's isCompactSummary carrier trap.
-  return item.type === 'user' && item.synthetic_reason === undefined
+  // This predicate means untagged, NOT proven human intent: recorded
+  // user_info preambles are also untagged. Turn classification belongs to
+  // the parser's document layer, not to this low-level storage codec.
+  return item.type === 'user' && item.synthetic_reason == null
 }
 
 export function isSyntheticUserItem(item: GrokConversationItem): item is GrokUserItem {
-  return item.type === 'user' && item.synthetic_reason !== undefined
+  return item.type === 'user' && item.synthetic_reason != null
 }

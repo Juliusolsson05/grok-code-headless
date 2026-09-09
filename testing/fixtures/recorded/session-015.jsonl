@@ -1,0 +1,7 @@
+{"type":"system","content":"[fixture text 1]<user_query>[fixture text 2]"}
+{"type":"user","content":[{"type":"text","text":"<user_info>\n[fixture text 3]\n</user_info>\n[fixture text 4]"}]}
+{"type":"user","content":[{"type":"text","text":"[fixture text 5]"}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"[fixture text 6]"}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"<user_query>\n[fixture text 7]\n</user_query>"}],"prompt_index":0}
+{"type":"reasoning","id":"fixture-id-1","summary":[{"type":"summary_text","text":"[fixture text 8]\n"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"[fixture text 9]","model_id":"[fixture text 10]","model_fingerprint":"[fixture text 11]","reasoning_effort":"high"}

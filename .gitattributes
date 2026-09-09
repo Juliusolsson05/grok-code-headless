@@ -1,0 +1,3 @@
+# SSE's final event is terminated by an empty line. It is protocol framing,
+# not accidental trailing whitespace to remove from recorded wire fixtures.
+testing/fixtures/streaming/*.sse whitespace=-blank-at-eof

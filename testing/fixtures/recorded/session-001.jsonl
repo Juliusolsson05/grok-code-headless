@@ -1,0 +1,2 @@
+{"type":"system","content":"[fixture text 1]<user_query>[fixture text 2]"}
+{"type":"user","content":[{"type":"text","text":"[fixture text 3]"}],"synthetic_reason":"system_reminder"}
