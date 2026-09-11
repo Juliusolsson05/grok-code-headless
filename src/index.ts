@@ -81,3 +81,10 @@ export { GrokResponseObserver } from './proxy/GrokResponseObserver.js'
 export type { GrokStreamEvent } from './proxy/GrokResponseObserver.js'
 export { ResponseCapture, replayResponseCapture } from './recording/ResponseCapture.js'
 export type { GrokCommandPermission, GrokCommandPermissionState, GrokPermissionChoice } from './conditions/commandPermission.js'
+
+// Owned ACP control is a separate lifetime from the legacy paste-driven PTY.
+// A host must prove the TUI shares this identity before exposing pane actions.
+export { GrokNativeControl } from './control/GrokNativeControl.js'
+export type { GrokNativeControlOptions, GrokMcpServer } from './control/GrokNativeControl.js'
+export { GrokAcpError } from './control/GrokAcpClient.js'
+export type { GrokAcpClientOptions, GrokAcpRequestOptions, GrokAcpServerRequest } from './control/GrokAcpClient.js'

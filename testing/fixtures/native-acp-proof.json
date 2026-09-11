@@ -6,9 +6,11 @@
   "sourceCommit": "37949780c144e37df692e3d669051a21fec24f20",
   "sourceMatchesInstalledBinary": false,
   "environment": "isolated-home-loopback-inference-and-mcp",
+  "controlTransport": "production-owner-direct-length-framed-leader-ipc",
   "verified": {
     "initialize": true,
     "requestedSessionIdentityPreserved": true,
+    "explicitSessionLoad": true,
     "literalMultilineAndTabsReachedInference": true,
     "liveUserEchoOptIn": true,
     "unexpectedImages": 0,
@@ -17,12 +19,15 @@
     "sessionMcpReadyAndInvocable": true,
     "mcpIsolationAcrossSessions": true,
     "nativeTuiPermissionVisible": true,
-    "permissionCancellationPreservedFixture": true
+    "permissionCancellationPreservedFixture": true,
+    "tuiRejectionRetiresControlPermissionToken": true,
+    "normalShutdownAcknowledgedAndNoMatchingNativeProcessRemained": true
   },
   "notProven": [
-    "production-lifecycle-and-reconnect",
+    "native-tui-crash-and-reconnect-containment",
+    "native-session-changing-command-containment",
     "model-driven-mcp-discovery",
     "full-agent-code-provider-integration"
   ],
-  "provenance": "Metadata-only verdict from scripts/probe-native-acp.mts; not a raw protocol recording. No session IDs, paths, prompts, headers or private payloads are retained."
+  "provenance": "Metadata-only verdict from both scripts/probe-native-acp.mts permission variants; not a raw protocol recording. No session IDs, paths, prompts, headers or private payloads are retained."
 }

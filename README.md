@@ -40,6 +40,40 @@ implemented. Additional condition variants, cross-provider host switching and
 Agent Code renderer integration remain pending. Progress:
 [agent-code#832](https://github.com/Juliusolsson05/agent-code/issues/832).
 
+Automated text delivery now has a separate `GrokNativeControl` API, verified
+against Grok 1.0.25 with literal multiline/tab-bearing ACP text, session MCP,
+and the real TUI. The legacy `GrokHeadless.sendPrompt()` still uses terminal
+paste, which can attach OS clipboard images ([#2](https://github.com/Juliusolsson05/grok-code-headless/issues/2)).
+Use the typed control route for automated text. Full app integration remains
+gated on native TUI reconnect/session identity containment
+([#3](https://github.com/Juliusolsson05/grok-code-headless/issues/3)).
+
+## Owned Native Control
+
+`await GrokNativeControl.start({ cwd, model })` starts a private leader and
+verifies protocol/PID ownership through direct native IPC before ACP initialize.
+`createSession(uuid, mcpServers)`, `loadSession(uuid, mcpServers)`,
+`prompt(uuid, text, { signal })`, and `updateMcpServers(uuid, mcpServers)` provide
+typed delivery. MCP updates await observable readiness; successful update RPCs
+alone are insufficient. No global leader, auth files or caches are adopted.
+
+Prompts resolve at native turn completion. Abort requests native cancellation
+but reports uncertainty until native completion; a new prompt for that session
+is refused while the prior turn remains unacknowledged. Disconnected requests
+are never replayed. Raw notifications retain native session/replay metadata;
+consumers still own session filtering and cannot infer activity from replay.
+
+`dispose()` is awaited and single-flight. If a TUI is attached by the host,
+`beforeClose` must acknowledge its process exit; the control RPC is already
+closed when this cleanup hook runs. A failed hook retains the owned leader and
+directory for an explicit cleanup retry. This ordering handles normal teardown,
+not the native TUI's automatic respawn on unexpected leader loss.
+
+The isolated proof is `GROK_ACP_PROBE=1 npx tsx scripts/probe-native-acp.mts`.
+Run with `GROK_ACP_PERMISSION_VIA_TUI=1` to also verify a native reject-once key
+invalidates the control client's stale permission action. Both use loopback
+inference/MCP and an allowlisted environment; no personal data is captured.
+
 ## Verification
 
 `npm run check` runs the deterministic suite, typecheck, build and package
