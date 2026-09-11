@@ -67,13 +67,18 @@ it('routes native inference through the relay and rejects a prior catalog origin
       let completed = false
       let stopReason: unknown
       const errors: string[] = []
+      const userEchoes: unknown[] = []
+      const userUpdates: unknown[] = []
       const runtime = await GrokHeadless.create({
         cwd: root, grokHome: home, grokBinary: binary,
         streaming: { upstreamBaseUrl: upstream },
-        extraArgs: ['--model', 'grok-4.6'],
+        extraArgs: ['--model', 'grok-4.6', '--fullscreen', '--no-leader'],
         env: {
           HOME: root, XDG_CONFIG_HOME: join(root, '.config'), XAI_API_KEY: 'fixture-only-not-a-real-key',
           GROK_CLI_CHAT_PROXY_BASE_URL: upstream,
+          // Supported native per-process policy: automation owns the composer;
+          // do not reinterpret model-generated ghost suggestions as user text.
+          GROK_PROMPT_SUGGESTIONS: '0',
           OTEL_TRACES_EXPORTER: 'none', OTEL_METRICS_EXPORTER: 'none',
         },
       })
@@ -83,12 +88,27 @@ it('routes native inference through the relay and rejects a prior catalog origin
       runtime.on('stream-event', event => events.push(event))
       runtime.on('screen', event => { painted = true; lastScreen = event.snapshot.plain })
       runtime.on('grok-entry', ({ item }) => { if (item.type === 'assistant' && item.content.trim() === 'PAPAYA') answer = true })
+      runtime.on('grok-entry', ({ item, replay }) => {
+        if (item.type !== 'user') return
+        const prompt = 'Do not use tools. Say PAPAYA.'
+        const wrapped = `<user_query>\n${prompt}\n</user_query>`
+        userEchoes.push({ replay, reason: item.synthetic_reason ?? null, parts: item.content.filter(part => part.type === 'text').map(part => ({
+          chars: part.text.length, plainMatch: part.text === prompt, wrappedMatch: part.text === wrapped,
+          trimmedWrappedMatch: part.text.trim() === wrapped, containsPrompt: part.text.includes(prompt),
+        })) })
+      })
       runtime.on('grok-update', event => { if (event.params.update.sessionUpdate === 'turn_completed') { completed = true; stopReason = event.params.update.stop_reason } })
+      runtime.on('grok-update', event => {
+        if (event.params.update.sessionUpdate !== 'user_message_chunk') return
+        const content = event.params.update.content as { type?: string; text?: string } | undefined
+        userUpdates.push({ replay: event.replay, generation: event.generation, type: content?.type, plainMatch: content?.text === 'Do not use tools. Say PAPAYA.' })
+      })
       runtime.on('error', error => errors.push(error.message))
       const readyDeadline = performance.now() + 15000
-      while (!painted && performance.now() < readyDeadline) await new Promise(resolve => setTimeout(resolve, 50))
+      while (runtime.promptGateState.kind !== 'ready' && performance.now() < readyDeadline) await new Promise(resolve => setTimeout(resolve, 50))
       expect(painted, `native TUI painted on attempt ${attempt}`).toBe(true)
-      runtime.sendPrompt('Do not use tools. Say PAPAYA.')
+      expect(runtime.promptGateState, `native composer before automated input: ${lastScreen.split('\n').slice(-8).join('\n')}`).toEqual({ kind: 'ready' })
+      expect(runtime.trySendPrompt('Do not use tools. Say PAPAYA.')).toBe(true)
       const deadline = performance.now() + 45000
       while (!(answer && completed) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100))
       expect(errors).toEqual([])
@@ -96,8 +116,13 @@ it('routes native inference through the relay and rejects a prior catalog origin
       expect(responses, 'fixture server handled inference').toBeGreaterThan(0)
       expect({ answer, completed }, `native completion: ${JSON.stringify({ stopReason, requestKinds })}; test-only screen: ${lastScreen.slice(0, 2500)}`).toEqual({ answer: true, completed: true })
       expect(events.filter(event => event.type === 'text-delta').map(event => event.delta).join('')).toContain('PAPAYA')
+      expect(runtime.promptGateState, `native user-echo shapes: ${JSON.stringify({ userEchoes, userUpdates })}`).not.toMatchObject({ reason: 'awaiting-input-ack' })
       const cache = JSON.parse(readFileSync(join(home, 'models_cache.json'), 'utf8'))
       expect(cache.origin).toBe(runtime.streamingInfo!.modelsListUrl)
+      runtime.resize(80, 24)
+      const resizeDeadline = performance.now() + 5000
+      while (runtime.promptGateState.kind !== 'ready' && performance.now() < resizeDeadline) await new Promise(resolve => setTimeout(resolve, 50))
+      expect(runtime.promptGateState, `native resized composer: ${lastScreen.split('\n').slice(-8).join('\n')}`).toEqual({ kind: 'ready' })
       await runtime.dispose()
     }
   } finally {

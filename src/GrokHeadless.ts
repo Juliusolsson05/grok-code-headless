@@ -4,7 +4,7 @@
 // See xai-grok-pager/src/app/cli.rs: --session-id names a fresh TUI session.
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -16,6 +16,7 @@ import { decodeGrokConversationItem, type GrokConversationItem } from './transcr
 import { GrokResponsesProxy, type GrokResponsesProxyOptions } from './proxy/GrokResponsesProxy.js'
 import type { GrokStreamEvent } from './proxy/GrokResponseObserver.js'
 import { detectCommandPermission, type GrokCommandPermission, type GrokCommandPermissionState, type GrokPermissionChoice } from './conditions/commandPermission.js'
+import { evaluateGrokPromptGate, type GrokPromptGate } from './conditions/promptGate.js'
 
 const require = createRequire(import.meta.url)
 
@@ -70,6 +71,7 @@ export interface GrokHeadlessEvents {
   /** Per-HTTP-request observations, not asserted main-turn ownership. */
   'stream-event': GrokStreamEvent
   'command-permission': GrokCommandPermission | null
+  'prompt-gate': GrokPromptGate
 }
 export interface GrokHeadless {
   on<K extends keyof GrokHeadlessEvents>(event: K, listener: (payload: GrokHeadlessEvents[K]) => void): this
@@ -81,6 +83,7 @@ export class GrokHeadless extends EventEmitter {
   private readonly pty: IPty
   private readonly terminal: HeadlessTerminal
   private readonly sessionId: string
+  private readonly updatesPath: string
   private readonly waiters = new Map<ReturnType<typeof setInterval>, () => void>()
   private readonly tailers: Array<{ drain(): Promise<void>; close(): Promise<void> }> = []
   private exitSubscription: IDisposable | undefined
@@ -98,6 +101,8 @@ export class GrokHeadless extends EventEmitter {
   private updateGeneration = 0
   private streamObservations = 0
   private promptStreamBaseline: number | undefined
+  private submission: { text?: string; frameGeneration: number; updateGeneration: number; afterByte: number } | undefined
+  private lastPromptGateKey: string | undefined
 
   static async create(options: GrokHeadlessCreateOptions): Promise<GrokHeadless> {
     const { streaming, ...sessionOptions } = options
@@ -158,6 +163,7 @@ export class GrokHeadless extends EventEmitter {
     const reserved = /^(?:-r|-s|-c|-p|--resume|--session-id|--continue|--single|--cwd|--fork-session)(?:=|$)/
     if (options.extraArgs?.some(arg => reserved.test(arg))) throw new Error('Extra arguments cannot override session ownership')
     const dir = join(home, 'sessions', encodeGrokSessionsDir(options.cwd), this.sessionId)
+    this.updatesPath = join(dir, 'updates.jsonl')
     const args = ['--no-auto-update', options.resumeSessionId ? '-r' : '--session-id', this.sessionId, ...(options.extraArgs ?? [])]
     const native = require('node-pty') as typeof import('node-pty')
     const local = join(homedir(), '.local', 'bin', 'grok')
@@ -171,6 +177,10 @@ export class GrokHeadless extends EventEmitter {
       this.terminal.on('screen', snapshot => {
         this.refreshCommandPermission()
         this.emit('screen', { snapshot })
+      })
+      this.terminal.on('frame-parsed', () => {
+        this.refreshCommandPermission()
+        this.publishPromptGate()
       })
       this.terminal.attach()
       this.dataSubscription = this.pty.onData(data => {
@@ -199,10 +209,11 @@ export class GrokHeadless extends EventEmitter {
         let replayThrough = 0
         this.tailers.push(new FileTailer<unknown>(path, (_entry, metadata) => {
           const decoded = decodeGrokConversationItem(metadata.rawLine)
+          const replay = metadata.lineStartOffset < replayThrough
           this.emit('grok-entry', {
             sessionId: this.sessionId, item: decoded.item, raw: decoded.raw,
             lineStartOffset: metadata.lineStartOffset, generation: metadata.generation,
-            replay: metadata.lineStartOffset < replayThrough,
+            replay,
           })
         }, error => this.emitError(error), {
           onSnapshot: event => {
@@ -214,7 +225,7 @@ export class GrokHeadless extends EventEmitter {
           },
         }))
       })
-      this.waitForFile(join(dir, 'updates.jsonl'), path => {
+      this.waitForFile(this.updatesPath, path => {
         let replayThrough = 0
         this.tailers.push(new FileTailer<GrokUpdateEvent>(path, (entry, metadata) => {
           if (!entry || typeof entry.timestamp !== 'number' || typeof entry.method !== 'string' ||
@@ -225,6 +236,17 @@ export class GrokHeadless extends EventEmitter {
             throw new Error('Update envelope belongs to a different session')
           }
           const replay = metadata.lineStartOffset < replayThrough
+          const content = entry.params.update.content as { type?: unknown; text?: unknown } | null | undefined
+          // Native 1.0.25 can replace chat history during the accepted turn, so
+          // those history rows are correctly replay-tagged. The matching live
+          // ACP user echo still proves acceptance; unrelated activity does not.
+          if (!replay && entry.params.update.sessionUpdate === 'user_message_chunk' &&
+            content?.type === 'text' && typeof content.text === 'string' &&
+            this.submission?.text === content.text && metadata.generation === this.submission.updateGeneration &&
+            metadata.lineStartOffset >= this.submission.afterByte) {
+            this.submission.text = undefined
+            this.publishPromptGate()
+          }
           this.emit('grok-update', {
             ...entry, sessionId: this.sessionId, replay,
             lineStartOffset: metadata.lineStartOffset, generation: metadata.generation,
@@ -257,6 +279,7 @@ export class GrokHeadless extends EventEmitter {
               // a still-painted card. Require newly appended command evidence;
               // replacement replay may contain abandoned approvals/completions.
               if (event.generation > 0) this.clearCommandPermission()
+              this.publishPromptGate()
             }
             this.emit('grok-history', { ...event, sessionId: this.sessionId, channel: 'updates' })
           },
@@ -266,6 +289,56 @@ export class GrokHeadless extends EventEmitter {
   }
 
   get sessionIdentity(): string { return this.sessionId }
+  /** Immutable parsed physical evidence for diagnostics/capture; may be unstable. */
+  snapshotFrame() { return this.closed ? null : this.terminal.snapshotStableFrame() }
+  get promptGateState(): GrokPromptGate {
+    if (this.closed) return { kind: 'closed' }
+    if (this.pendingCommands.size > 0 && this.commandPermissionState.status === 'card') return { kind: 'blocked', reason: 'command-permission' }
+    if (this.submission?.text !== undefined) return this.submission.updateGeneration !== this.updateGeneration
+      ? { kind: 'blocked', reason: 'history-generation-changed' }
+      : { kind: 'warming', reason: 'awaiting-input-ack' }
+    const frame = this.terminal.snapshotStableFrame()
+    const gate = evaluateGrokPromptGate(frame)
+    // Acceptance and rendering are independent channels. Never reopen the
+    // pre-submission screen after ACP acknowledges; require a later explicit
+    // native cursor placement/reveal, not merely unrelated status bytes arriving.
+    if (gate.kind === 'ready' && this.submission &&
+      (frame?.cursor.reassertGeneration ?? -1) <= this.submission.frameGeneration) {
+      return { kind: 'warming', reason: 'awaiting-composer-repaint' }
+    }
+    return gate
+  }
+  /** One checked transport submission; true does not mean inference completed. */
+  trySendPrompt(text: string): boolean {
+    const normalized = text.replace(/\r\n?/g, '\n')
+    // Literal prompt delivery must not smuggle a bracketed-paste terminator or
+    // terminal action. Raw terminal clients deliberately use sendInput instead.
+    if (!normalized.trim() || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(normalized)) return false
+    if (this.promptGateState.kind !== 'ready') return false
+    const frame = this.terminal.snapshotStableFrame()
+    if (!frame) return false
+    let afterByte = 0
+    try {
+      const before = statSync(this.updatesPath)
+      if (!before.isFile()) return false
+      afterByte = before.size
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    // Reserve before writing: two callers must not consume the same empty
+    // screen while the native process has yet to paint its pasted input.
+    // ACP is the single acknowledgement authority. Mixing history echoes with
+    // ACP would let a delayed history row for request A acknowledge a second
+    // identical request B after ACP already acknowledged A. Replayed ACP and
+    // unrelated screen paint cannot consume the reservation either.
+    // Fence bytes already on disk too: a live-but-buffered old echo is not
+    // acceptance of this write. Generation changes conservatively retain the
+    // reservation rather than borrowing an echo from replacement history.
+    this.submission = { text: normalized, frameGeneration: frame.generation, updateGeneration: this.updateGeneration, afterByte }
+    this.publishPromptGate()
+    this.sendPrompt(normalized)
+    return true
+  }
   get pid(): number | undefined { return this.closed ? undefined : this.pty.pid }
   get lastError(): Error | undefined { return this.lastFailure }
   get streamingInfo(): GrokResponsesProxy['info'] | undefined { return this.ownedRelay?.info }
@@ -314,12 +387,24 @@ export class GrokHeadless extends EventEmitter {
     this.refreshCommandPermission()
   }
   private refreshCommandPermission(): void {
+    if (this.pendingCommands.size === 0 && this.lastPermissionId === undefined) return
     const current = this.commandPermission
     if (current?.id === this.lastPermissionId) return
     this.lastPermissionId = current?.id
     // Keep the consumed token even across temporarily unreadable frames. A
     // flicker must not turn one user decision into two key submissions.
     try { this.emit('command-permission', current) } catch (error) { this.emitError(error) }
+  }
+  private publishPromptGate(): void {
+    // Most raw-terminal consumers do not need this channel. Avoid a full cell
+    // snapshot for them, and avoid expensive duplicate screen serialization for
+    // clients that only need control/ownership changes.
+    if (!this.listenerCount('prompt-gate')) return
+    const gate = this.promptGateState
+    const key = JSON.stringify(gate)
+    if (key === this.lastPromptGateKey) return
+    this.lastPromptGateKey = key
+    try { this.emit('prompt-gate', gate) } catch (error) { this.emitError(error) }
   }
   private clearCommandPermission(): void {
     this.pendingCommands.clear()
@@ -332,8 +417,9 @@ export class GrokHeadless extends EventEmitter {
   sendPrompt(text: string): void {
     this.assertOpen()
     this.promptStreamBaseline = this.streamObservations
-    this.pty.write(`\x1b[200~${text}\x1b[201~`)
-    this.pty.write('\r')
+    // One logical transport write includes Enter, matching the app's Codex
+    // delivery boundary. Native acceptance is still a separate observed echo.
+    this.pty.write(`\x1b[200~${text}\x1b[201~\r`)
     this.markActivity()
   }
   sendInput(data: string): void { this.assertOpen(); this.pty.write(data) }
@@ -407,6 +493,8 @@ export class GrokHeadless extends EventEmitter {
       }
     }
     this.waiters.clear()
+    this.submission = undefined
+    this.publishPromptGate()
     this.dataSubscription?.dispose()
     this.dataSubscription = undefined
     this.terminal.dispose()

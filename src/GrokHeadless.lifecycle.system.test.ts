@@ -15,6 +15,9 @@ const native = createRequire(import.meta.url)('node-pty') as typeof import('node
 const id = '01a07e08-375e-7643-a809-9ab78735e5c7'
 const pendingCommandLine = JSON.stringify({ timestamp: 1, method: 'session/update', params: { sessionId: id, update: { sessionUpdate: 'tool_call', toolCallId: 'command-call', title: 'run_terminal_command', rawInput: { command: 'rm -rf ./permission-probe' } } } }) + '\n'
 const permissionFixture = JSON.parse(readFileSync(new URL('../testing/fixtures/conditions/command-approval.json', import.meta.url), 'utf8'))
+const composerFixture = JSON.parse(readFileSync(new URL('../testing/fixtures/conditions/composer-1.0.25.json', import.meta.url), 'utf8')) as {
+  frames: Array<{ label: string; frame: { rows: { text: string }[]; cursor: { x: number; y: number; visible: boolean } } }>
+}
 let root: string
 let runtime: GrokHeadless | undefined
 let processDouble: ReturnType<typeof controlledPty>
@@ -39,6 +42,12 @@ function sessionFiles(sessionId = id) {
   return dir
 }
 
+function paintComposer(label: string): void {
+  const frame = composerFixture.frames.find(entry => entry.label === label)!.frame
+  processDouble.paint('\x1b[2J' + frame.rows.map((row, index) => `\x1b[${index + 1};1H${row.text}`).join('') +
+    `\x1b[${frame.cursor.y + 1};${frame.cursor.x + 1}H\x1b[?25${frame.cursor.visible ? 'h' : 'l'}`)
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'grok-lifecycle-'))
   processDouble = controlledPty()
@@ -52,6 +61,190 @@ afterEach(async () => {
 })
 
 describe('headless runtime boundary contracts', () => {
+  it('refuses gated prompt delivery before paint and while a recorded draft or overlay owns input', async () => {
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home') })
+    expect(runtime.trySendPrompt('fixture request')).toBe(false)
+    for (const [label, kind] of [['multiline-draft', 'occupied'], ['after-control-u', 'occupied'], ['stashed', 'occupied'], ['after-control-p', 'blocked']] as const) {
+      paintComposer(label)
+      await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe(kind))
+      expect(runtime.trySendPrompt('fixture request')).toBe(false)
+    }
+    expect(processDouble.pty.write).not.toHaveBeenCalled()
+  })
+
+  it('reserves an empty composer until a live ACP user echo acknowledges the submitted prompt', async () => {
+    const dir = sessionFiles()
+    writeFileSync(join(dir, 'updates.jsonl'), '')
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home'), resumeSessionId: id })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    expect(runtime.trySendPrompt('duplicate fixture request')).toBe(false)
+    expect(processDouble.pty.write).toHaveBeenCalledExactlyOnceWith('\x1b[200~fixture request\x1b[201~\r')
+    appendFileSync(join(dir, 'updates.jsonl'), JSON.stringify({ timestamp: 1, method: '_x.ai/session/update', params: { sessionId: id,
+      update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fixture request' } },
+    } }) + '\n')
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    await runtime.dispose()
+    expect(runtime.promptGateState.kind).toBe('closed')
+    expect(runtime.trySendPrompt('after exit')).toBe(false)
+  })
+
+  it('does not let replayed matching history or unrelated repaint acknowledge a gated submission', async () => {
+    const dir = sessionFiles()
+    writeFileSync(join(dir, 'updates.jsonl'), '')
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home'), resumeSessionId: id })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    const echo = JSON.stringify({ type: 'user', content: [{ type: 'text', text: '<user_query>\nfixture request\n</user_query>' }] }) + '\n'
+    const replayed = new Promise<void>(resolve => runtime!.once('grok-entry', () => resolve()))
+    writeFileSync(join(dir, 'chat_history.jsonl'), echo)
+    await replayed
+    paintComposer('cleared')
+    await vi.waitFor(() => expect(runtime!.promptGateState).toEqual({ kind: 'warming', reason: 'awaiting-input-ack' }))
+    expect(runtime.trySendPrompt('duplicate request')).toBe(false)
+    appendFileSync(join(dir, 'updates.jsonl'), JSON.stringify({ timestamp: 1, method: '_x.ai/session/update', params: { sessionId: id,
+      update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fixture request' } },
+    } }) + '\n')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+  })
+
+  it('rejects blank input and terminal-control bytes without reserving or writing the composer', async () => {
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home') })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    expect(runtime.trySendPrompt('   ')).toBe(false)
+    expect(runtime.trySendPrompt('\x1b[201~1\r')).toBe(false)
+    expect(processDouble.pty.write).not.toHaveBeenCalled()
+    expect(runtime.promptGateState.kind).toBe('ready')
+  })
+
+  it('acknowledges live ACP user echoes when native history is rewritten, but never replayed ACP echoes', async () => {
+    const dir = sessionFiles()
+    const updates = join(dir, 'updates.jsonl')
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home'), resumeSessionId: id })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    // Grok 1.0.25's recorded native probe rewrites chat history during this
+    // turn, but its ACP user_message_chunk remains a live plain-text echo.
+    const echo = JSON.stringify({ timestamp: 1, method: '_x.ai/session/update', params: { sessionId: id,
+      update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fixture request' } },
+    } }) + '\n'
+    const replayed = new Promise<void>(resolve => runtime!.once('grok-update', () => resolve()))
+    writeFileSync(updates, echo)
+    await replayed
+    expect(runtime.promptGateState).toMatchObject({ reason: 'awaiting-input-ack' })
+    appendFileSync(updates, echo)
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+  })
+
+  it('does not let a delayed history echo acknowledge a second identical submission', async () => {
+    const dir = sessionFiles()
+    const updates = join(dir, 'updates.jsonl')
+    const history = join(dir, 'chat_history.jsonl')
+    writeFileSync(updates, '')
+    writeFileSync(history, '')
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home'), resumeSessionId: id })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    const update = JSON.stringify({ timestamp: 1, method: '_x.ai/session/update', params: { sessionId: id,
+      update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fixture request' } },
+    } }) + '\n'
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    appendFileSync(updates, update)
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    const delayedHistory = new Promise<void>(resolve => runtime!.once('grok-entry', () => resolve()))
+    appendFileSync(history, JSON.stringify({ type: 'user', content: [{ type: 'text', text: '<user_query>\nfixture request\n</user_query>' }] }) + '\n')
+    await delayedHistory
+    expect(runtime.promptGateState).toMatchObject({ reason: 'awaiting-input-ack' })
+    appendFileSync(updates, update)
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+  })
+
+  it('requires a fresh native cursor reveal after acceptance before reusing the composer', async () => {
+    const dir = sessionFiles()
+    writeFileSync(join(dir, 'updates.jsonl'), '')
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home'), resumeSessionId: id })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    const accepted = new Promise<void>(resolve => runtime!.once('grok-update', () => resolve()))
+    appendFileSync(join(dir, 'updates.jsonl'), JSON.stringify({ timestamp: 1, method: '_x.ai/session/update', params: { sessionId: id,
+      update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fixture request' } },
+    } }) + '\n')
+    await accepted
+    expect(runtime.promptGateState).toMatchObject({ kind: 'warming', reason: 'awaiting-composer-repaint' })
+    const beforeStatus = runtime.snapshotFrame()!.generation
+    processDouble.paint('\x1b]0;fixture status tick\x07')
+    await vi.waitFor(() => expect(runtime!.snapshotFrame()?.generation).toBeGreaterThan(beforeStatus))
+    expect(runtime.trySendPrompt('next request')).toBe(false)
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+  })
+
+  it('publishes control-only gate changes even when screen text is unchanged', async () => {
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home') })
+    const states: string[] = []
+    runtime.on('prompt-gate', state => states.push(state.kind))
+    paintComposer('initial')
+    await vi.waitFor(() => expect(states.at(-1)).toBe('ready'))
+    processDouble.paint('\x1b[?25l')
+    await vi.waitFor(() => expect(states.at(-1)).toBe('blocked'))
+    processDouble.paint('\x1b[?25h')
+    await vi.waitFor(() => expect(states.at(-1)).toBe('ready'))
+    await runtime.dispose()
+    expect(states.at(-1)).toBe('closed')
+  })
+
+  it('does not acknowledge a new submission with matching live ACP bytes already on disk', async () => {
+    const dir = sessionFiles()
+    const updates = join(dir, 'updates.jsonl')
+    writeFileSync(updates, '')
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home'), resumeSessionId: id })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    const echo = JSON.stringify({ timestamp: 1, method: '_x.ai/session/update', params: { sessionId: id,
+      update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fixture request' } },
+    } }) + '\n'
+    const oldEcho = new Promise<void>(resolve => runtime!.once('grok-update', () => resolve()))
+    // No await between the old append and submission: the private poll has
+    // not delivered these bytes yet, despite their already existing on disk.
+    appendFileSync(updates, echo)
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    await oldEcho
+    expect(runtime.promptGateState).toMatchObject({ reason: 'awaiting-input-ack' })
+    paintComposer('initial')
+    appendFileSync(updates, echo)
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+  })
+
+  it('does not borrow acceptance from a different ACP file generation', async () => {
+    const dir = sessionFiles()
+    const updates = join(dir, 'updates.jsonl')
+    writeFileSync(updates, '')
+    runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home'), resumeSessionId: id })
+    paintComposer('initial')
+    await vi.waitFor(() => expect(runtime!.promptGateState.kind).toBe('ready'))
+    expect(runtime.trySendPrompt('fixture request')).toBe(true)
+    writeFileSync(join(dir, 'replacement'), '')
+    renameSync(join(dir, 'replacement'), updates)
+    await vi.waitFor(() => expect(runtime!.promptGateState).toEqual({ kind: 'blocked', reason: 'history-generation-changed' }))
+    const observed = new Promise<void>(resolve => runtime!.once('grok-update', () => resolve()))
+    appendFileSync(updates, JSON.stringify({ timestamp: 1, method: '_x.ai/session/update', params: { sessionId: id,
+      update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fixture request' } },
+    } }) + '\n')
+    await observed
+    paintComposer('initial')
+    expect(runtime.trySendPrompt('another request')).toBe(false)
+  })
+
   it('exposes raw terminal bytes and the owned pid without reconstructing bytes from screen snapshots', async () => {
     runtime = new GrokHeadless({ cwd: root, grokHome: join(root, 'home') })
     const data: string[] = []

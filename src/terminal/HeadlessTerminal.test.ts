@@ -39,6 +39,46 @@ async function waitForFrame(
 }
 
 describe('HeadlessTerminal provider layout epochs', () => {
+  it('reports parsed cursor visibility even when hide/show sequences span PTY chunks', async () => {
+    const controlled = controlledPty()
+    const terminal = new HeadlessTerminal({ pty: controlled.pty, cols: 80, rows: 24 })
+    terminal.attach()
+    try {
+      controlled.emitData('\x1b[?25h')
+      expect((await waitForFrame(terminal, frame => frame.generation === 1)).cursor.visible).toBe(true)
+      const partialParsed = new Promise<void>(resolve => terminal.on('screen', screen => {
+        if (screen.plain.includes('fixture')) resolve()
+      }))
+      controlled.emitData('fixture\x1b[?25')
+      await partialParsed
+      expect(terminal.snapshotStableFrame()).toBeNull()
+      controlled.emitData('l')
+      expect((await waitForFrame(terminal, frame => frame.generation === 3)).cursor.visible).toBe(false)
+      controlled.emitData('\x1b[?25h')
+      expect((await waitForFrame(terminal, frame => frame.generation === 4)).cursor.visible).toBe(true)
+    } finally { terminal.dispose() }
+  })
+
+  it('tracks explicit cursor reveals separately from unrelated writes and withholds synchronized batches', async () => {
+    const controlled = controlledPty()
+    const terminal = new HeadlessTerminal({ pty: controlled.pty, cols: 80, rows: 24, snapshotIntervalMs: 1 })
+    terminal.attach()
+    try {
+      controlled.emitData('\x1b[?25hfirst')
+      expect((await waitForFrame(terminal, frame => frame.generation === 1)).cursor.reassertGeneration).toBe(1)
+      controlled.emitData(' status')
+      expect((await waitForFrame(terminal, frame => frame.generation === 2)).cursor.reassertGeneration).toBe(1)
+      const batchParsed = new Promise<void>(resolve => terminal.on('screen', screen => {
+        if (screen.plain.includes('batch')) resolve()
+      }))
+      controlled.emitData('\x1b[?2026h batch')
+      await batchParsed
+      expect(terminal.snapshotStableFrame()).toBeNull()
+      controlled.emitData('\x1b[?25h\x1b[?2026l')
+      expect((await waitForFrame(terminal, frame => frame.generation === 4)).cursor.reassertGeneration).toBe(4)
+    } finally { terminal.dispose() }
+  })
+
   it('keeps resized xterm geometry unacknowledged until later provider bytes parse', async () => {
     const controlled = controlledPty()
     const terminal = new HeadlessTerminal({

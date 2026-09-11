@@ -133,7 +133,8 @@ export type StableTerminalFrame = {
   cursorPaintGeneration?: number
   cols: number
   rows: readonly StableTerminalRow[]
-  cursor: Readonly<{ x: number; y: number }>
+  /** Visibility is absent if the terminal implementation cannot prove it. */
+  cursor: Readonly<{ x: number; y: number; visible?: boolean; reassertGeneration?: number }>
 }
 
 type TerminalPaintState = {
@@ -154,6 +155,8 @@ function paintRowsEqual(
 }
 
 export type HeadlessTerminalEvents = {
+  /** Control-only changes matter to input ownership even when text is unchanged. */
+  'frame-parsed': [number]
   /** Raw PTY bytes received. Use for recording/fidelity. */
   'pty-data': [string]
   /** Throttled dual-snapshot of the terminal viewport. */
@@ -282,6 +285,8 @@ export class HeadlessTerminal extends EventEmitter {
   private layoutStartGeneration = 0
   private rowPaintGenerations: number[]
   private cursorPaintGeneration = 0
+  private cursorReassertGeneration = 0
+  private synchronizedOutput = false
   private lastProviderPaintState: TerminalPaintState
   private exited = false
   private attached = false
@@ -312,6 +317,28 @@ export class HeadlessTerminal extends EventEmitter {
       rows,
       allowProposedApi: true,
       scrollback: 10000,
+    })
+    // These hooks run INSIDE xterm's parser and return false so native mode
+    // handling still runs. Do not grow a second raw-byte ANSI state machine.
+    // Explicit cursor placement/reveal proves new native paint even when the empty
+    // composer has exactly the same cells as before a submitted prompt.
+    this.term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, params => {
+      if (params.includes(25)) this.cursorReassertGeneration = this.parsedFrameGeneration + 1
+      if (params.includes(2026)) this.synchronizedOutput = true
+      return false
+    })
+    this.term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, params => {
+      if (params.includes(2026)) this.synchronizedOutput = false
+      return false
+    })
+    for (const final of ['H', 'f']) this.term.parser.registerCsiHandler({ final }, () => {
+      this.cursorReassertGeneration = this.parsedFrameGeneration + 1
+      return false
+    })
+    this.term.parser.registerEscHandler({ final: 'c' }, () => {
+      this.synchronizedOutput = false
+      this.cursorReassertGeneration = 0
+      return false
     })
     this.rowPaintGenerations = Array.from({ length: rows }, () => 0)
     this.lastProviderPaintState = this.capturePaintState()
@@ -371,7 +398,12 @@ export class HeadlessTerminal extends EventEmitter {
         // and we'd snapshot mid-parse. The throttle inside
         // scheduleFlush() coalesces multiple completions into one
         // snapshot per snapshotIntervalMs window.
-        if (this.pendingWrites === 0) this.scheduleFlush()
+        if (this.pendingWrites === 0) {
+          // Keep expensive screen/markdown serialization text-deduplicated.
+          // Readiness/conditions get a separate cheap control-change edge.
+          try { this.emit('frame-parsed', this.parsedFrameGeneration) }
+          finally { this.scheduleFlush() }
+        }
       })
     })
 
@@ -444,7 +476,15 @@ export class HeadlessTerminal extends EventEmitter {
    * provider adapter inspect only the current bottom composer and footer.
    */
   snapshotStableFrame(): StableTerminalFrame | null {
-    if (this.pendingWrites !== 0) return null
+    if (this.pendingWrites !== 0 || this.synchronizedOutput) return null
+    const parserState = (this.term as unknown as {
+      _core?: { _inputHandler?: { _parser?: { currentState?: unknown } } }
+    })._core?._inputHandler?._parser?.currentState
+    // GROUND is 0 in the pinned xterm 5.5 parser. A consumed chunk can still
+    // end halfway through CSI/OSC: until its terminator arrives, even the old
+    // visible cursor is not safe input-ownership evidence. Unknown internals
+    // after a dependency upgrade also fail closed.
+    if (parserState !== 0) return null
 
     const buffer = this.term.buffer.active
     const rows: StableTerminalRow[] = []
@@ -464,6 +504,14 @@ export class HeadlessTerminal extends EventEmitter {
     }
 
     const absoluteCursorY = buffer.baseY + buffer.cursorY
+    // xterm 5.5 exposes position publicly but keeps DECTCEM visibility in its
+    // parsed core service. Read that one physical fact rather than implementing
+    // a second ANSI parser (which would disagree across split escape chunks).
+    // This deliberately narrow private bridge is optional: an xterm upgrade
+    // that removes it yields unknown visibility, and prompt gates fail closed.
+    const hidden = (this.term as unknown as {
+      _core?: { coreService?: { isCursorHidden?: unknown } }
+    })._core?.coreService?.isCursorHidden
     return Object.freeze({
       generation: this.parsedFrameGeneration,
       layoutEpoch: this.layoutEpoch,
@@ -475,6 +523,8 @@ export class HeadlessTerminal extends EventEmitter {
       cursor: Object.freeze({
         x: buffer.cursorX,
         y: absoluteCursorY - buffer.viewportY,
+        ...(typeof hidden === 'boolean' ? { visible: !hidden } : {}),
+        reassertGeneration: this.cursorReassertGeneration,
       }),
     })
   }
