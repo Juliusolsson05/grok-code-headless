@@ -1,0 +1,342 @@
+{
+  "version": 1,
+  "source": "native Grok chat_history.jsonl",
+  "normalization": "shape-only-v1",
+  "sessions": [
+    {
+      "file": "session-001.jsonl",
+      "records": 2,
+      "bytes": 182,
+      "sha256": "aa5e4640d794477d6a1a7960ee723b59149b36c6a7365e0d194ae7589dd34c56",
+      "types": {
+        "system": 1,
+        "user": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 1
+      }
+    },
+    {
+      "file": "session-002.jsonl",
+      "records": 111,
+      "bytes": 20546,
+      "sha256": "bff48444578b7f05399272d9c145dc3472438c09afad3598848b5c619cf2f517",
+      "types": {
+        "system": 1,
+        "user": 3,
+        "reasoning": 11,
+        "assistant": 11,
+        "tool_result": 85
+      },
+      "syntheticReasons": {
+        "project_instructions": 1,
+        "system_reminder": 1
+      }
+    },
+    {
+      "file": "session-003.jsonl",
+      "records": 585,
+      "bytes": 134526,
+      "sha256": "f108153a28ba0fe4a49fc774cc4e296ba1e09aa76f51968d51e079dce5a33083",
+      "types": {
+        "system": 1,
+        "user": 23,
+        "reasoning": 133,
+        "assistant": 121,
+        "tool_result": 297,
+        "backend_tool_call": 10
+      },
+      "syntheticReasons": {
+        "compaction_meta": 2,
+        "system_reminder": 2,
+        "task_completed": 2
+      }
+    },
+    {
+      "file": "session-004.jsonl",
+      "records": 89,
+      "bytes": 16092,
+      "sha256": "527ad420b952cb6f9677b48d0abcf279055615213c7a37cf69d130fb5e969e80",
+      "types": {
+        "system": 1,
+        "user": 3,
+        "reasoning": 9,
+        "assistant": 9,
+        "tool_result": 67
+      },
+      "syntheticReasons": {
+        "project_instructions": 1,
+        "system_reminder": 1
+      }
+    },
+    {
+      "file": "session-005.jsonl",
+      "records": 121,
+      "bytes": 102703,
+      "sha256": "4bdf22f04149193f9595b0db35d8ac68dd0e6cfa5aec6b6d90309a0d0e575e50",
+      "types": {
+        "system": 1,
+        "user": 11,
+        "reasoning": 53,
+        "assistant": 14,
+        "tool_result": 12,
+        "backend_tool_call": 30
+      },
+      "syntheticReasons": {
+        "system_reminder": 2
+      }
+    },
+    {
+      "file": "session-006.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-007.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-008.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-009.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-010.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-011.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-012.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-013.jsonl",
+      "records": 6,
+      "bytes": 627,
+      "sha256": "0b0ac1c4a0abb18443697dc36fd2d09cb808cafcf341c2a9720bf08f82211bbc",
+      "types": {
+        "system": 1,
+        "user": 5
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-014.jsonl",
+      "records": 12,
+      "bytes": 1614,
+      "sha256": "ccf51e94527625bdb78a3e70bc60c6f67a4b08e3409879cf9b972979673dc972",
+      "types": {
+        "system": 1,
+        "user": 6,
+        "reasoning": 2,
+        "assistant": 2,
+        "tool_result": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 4
+      }
+    },
+    {
+      "file": "session-015.jsonl",
+      "records": 7,
+      "bytes": 843,
+      "sha256": "1cc49f4f98aa0cb8d8d41a676fe20f7558cff3aec5aac1bbc5d1baf379d85214",
+      "types": {
+        "system": 1,
+        "user": 4,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 2
+      }
+    },
+    {
+      "file": "session-016.jsonl",
+      "records": 7,
+      "bytes": 841,
+      "sha256": "ed4899b74fa90b424612e2b25dcde3b5d98bdb6b54670bee6d2dfb46d8340eb0",
+      "types": {
+        "system": 1,
+        "user": 4,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 2
+      }
+    },
+    {
+      "file": "session-017.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-018.jsonl",
+      "records": 6,
+      "bytes": 627,
+      "sha256": "0b0ac1c4a0abb18443697dc36fd2d09cb808cafcf341c2a9720bf08f82211bbc",
+      "types": {
+        "system": 1,
+        "user": 5
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-019.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-020.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-021.jsonl",
+      "records": 8,
+      "bytes": 951,
+      "sha256": "c5f433cdca1f36bbf1a637b77e862f0bd33f5f413a5300f51d9deedeff1d76f2",
+      "types": {
+        "system": 1,
+        "user": 5,
+        "reasoning": 1,
+        "assistant": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 3
+      }
+    },
+    {
+      "file": "session-022.jsonl",
+      "records": 7,
+      "bytes": 738,
+      "sha256": "58e9236c73336246ed62c36cb6107df2aeb2890d8473b6f72778d78d3dd7910d",
+      "types": {
+        "system": 1,
+        "user": 3,
+        "assistant": 2,
+        "reasoning": 1
+      },
+      "syntheticReasons": {
+        "system_reminder": 1
+      }
+    }
+  ]
+}

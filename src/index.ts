@@ -47,3 +47,44 @@ export {
   resolveGrokTranscriptPath,
 } from './transcript/SessionList.js'
 export type { GrokSessionListEntry } from './transcript/SessionList.js'
+
+// --- Headless session core (Task 4) ---
+export { GrokHeadless } from './GrokHeadless.js'
+export type {
+  GrokHeadlessOptions,
+  GrokHeadlessCreateOptions,
+  GrokHeadlessEvents,
+  GrokScreenEvent,
+  GrokEntryEvent,
+  GrokHistoryEvent,
+  GrokUpdateEvent,
+  GrokSessionEvent,
+  GrokExitEvent,
+  GrokActivityEvent,
+  GrokIdleEvent,
+} from './GrokHeadless.js'
+export { HeadlessTerminal } from './terminal/HeadlessTerminal.js'
+export type {
+  HeadlessTerminalOptions,
+  HeadlessTerminalEvents,
+  ScreenSnapshot,
+  StableTerminalFrame,
+  StableTerminalRow,
+} from './terminal/HeadlessTerminal.js'
+export { FileTailer, RolloutGenerationMismatchError } from './transcript/JsonlTailer.js'
+export type { FileTailerOptions, FileTailerEntryMetadata, FileTailerSnapshotEvent } from './transcript/JsonlTailer.js'
+
+// Standalone provider observation/capture; no Agent Code or renderer imports.
+export { GrokResponsesProxy } from './proxy/GrokResponsesProxy.js'
+export type { GrokResponsesProxyOptions } from './proxy/GrokResponsesProxy.js'
+export { GrokResponseObserver } from './proxy/GrokResponseObserver.js'
+export type { GrokStreamEvent } from './proxy/GrokResponseObserver.js'
+export { ResponseCapture, replayResponseCapture } from './recording/ResponseCapture.js'
+export type { GrokCommandPermission, GrokCommandPermissionState, GrokPermissionChoice } from './conditions/commandPermission.js'
+
+// Owned ACP control is a separate lifetime from the legacy paste-driven PTY.
+// A host must prove the TUI shares this identity before exposing pane actions.
+export { GrokNativeControl } from './control/GrokNativeControl.js'
+export type { GrokNativeControlOptions, GrokMcpServer } from './control/GrokNativeControl.js'
+export { GrokAcpError } from './control/GrokAcpClient.js'
+export type { GrokAcpClientOptions, GrokAcpRequestOptions, GrokAcpServerRequest } from './control/GrokAcpClient.js'

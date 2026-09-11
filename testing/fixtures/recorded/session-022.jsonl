@@ -1,0 +1,7 @@
+{"type":"system","content":"[fixture text 1]<user_query>[fixture text 2]"}
+{"type":"user","content":[{"type":"text","text":"[fixture text 3]"}]}
+{"type":"assistant","content":"[fixture text 4]"}
+{"type":"user","content":[{"type":"text","text":"[fixture text 5]"}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"<user_query>\n[fixture text 6]\n</user_query>"}],"prompt_index":0}
+{"type":"reasoning","id":"fixture-id-1","summary":[{"type":"summary_text","text":"[fixture text 7]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"[fixture text 8]","model_id":"[fixture text 9]","model_fingerprint":"[fixture text 10]","reasoning_effort":"high"}
