@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "native-protocol-verdict",
+  "nativeVersion": "1.0.25",
+  "nativeRevision": "f7e67d6988e2",
+  "sourceCommit": "37949780c144e37df692e3d669051a21fec24f20",
+  "sourceMatchesInstalledBinary": false,
+  "environment": "isolated-home-loopback-inference-and-mcp",
+  "verified": {
+    "initialize": true,
+    "requestedSessionIdentityPreserved": true,
+    "literalMultilineAndTabsReachedInference": true,
+    "liveUserEchoOptIn": true,
+    "unexpectedImages": 0,
+    "nativeTuiReplay": true,
+    "nativeTuiLiveReply": true,
+    "sessionMcpReadyAndInvocable": true,
+    "mcpIsolationAcrossSessions": true,
+    "nativeTuiPermissionVisible": true,
+    "permissionCancellationPreservedFixture": true
+  },
+  "notProven": [
+    "production-lifecycle-and-reconnect",
+    "model-driven-mcp-discovery",
+    "full-agent-code-provider-integration"
+  ],
+  "provenance": "Metadata-only verdict from scripts/probe-native-acp.mts; not a raw protocol recording. No session IDs, paths, prompts, headers or private payloads are retained."
+}
