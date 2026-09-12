@@ -69,6 +69,14 @@ closed when this cleanup hook runs. A failed hook retains the owned leader and
 directory for an explicit cleanup retry. This ordering handles normal teardown,
 not the native TUI's automatic respawn on unexpected leader loss.
 
+The internal TUI socket guard now has separate framed-protocol tests and an
+installed-native fault proof. It suppresses upstream shutdown/EOF, fences new
+traffic, and retains the downstream connection until the host acknowledges TUI
+exit. Failed attachment and idle/mid-turn leader crashes pass in a disposable
+OS no-fork test boundary. Runtime/pane adoption, session-changing commands, and
+dead/stalled-host behavior remain separate gates; see
+[`native-tui-crash-guard.md`](docs/plans/native-tui-crash-guard.md).
+
 The isolated proof is `GROK_ACP_PROBE=1 npx tsx scripts/probe-native-acp.mts`.
 Run with `GROK_ACP_PERMISSION_VIA_TUI=1` to also verify a native reject-once key
 invalidates the control client's stale permission action. Both use loopback

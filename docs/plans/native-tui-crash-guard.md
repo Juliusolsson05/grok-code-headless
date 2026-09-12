@@ -74,3 +74,36 @@ policy, and normalized native history corpus.
 
 Stage 1 is internal infrastructure. It does not authorize enabling app input or
 closing issue #3 before stages 2 and 3 prove the required native lifetime boundary.
+
+## Verified checkpoint
+
+The framed guard now passes real-socket tests for PID admission, byte fidelity,
+fragmented shutdown suppression, EOF holding, explicit dependent-exit cleanup,
+cleanup retry after socket release, invalid native/JSON envelopes, shared byte
+budgets, frame-count limits and unexpected reconnect reporting. Independent
+review findings were reproduced and corrected; validation lives separately in
+GrokLeaderEnvelope.ts rather than expanding downstream condition handling.
+
+Installed 1.0.25 passes the normal guarded ACP/TUI/MCP/permission proof. Native
+fault variants also pass for failed TUI upstream attachment, leader SIGKILL while
+idle, and leader SIGKILL during an outstanding inference request. TUI cleanup is
+deliberately delayed one second after the guard holds: the TUI stays alive and
+the downstream connection count remains exactly one, then its owned exit is
+acknowledged before guard release. The lost prompt reports uncertainty.
+
+Fault runs put only the disposable native TUI under macOS Seatbelt's
+`deny process-fork`, independently verified first with a child spawn returning
+EPERM. This contains replacement descendants even if the implementation fails;
+it is not a new restriction on production user sessions. The normal proof passed
+both with and without this test-only containment. Process searches assert absence
+after cleanup and are never authority to signal a discovered PID.
+
+Commands (Node 24): `GROK_ACP_PROBE=1 GROK_ACP_TUI_GUARD=1 npx tsx
+scripts/probe-native-acp.mts`; add `GROK_ACP_TUI_NO_FORK=1` and
+`GROK_ACP_GUARD_FAULT=attach`, `idle`, or `mid-turn` for each fault variant.
+`GROK_ACP_PERMISSION_VIA_TUI=1` exercises the native reject-once route.
+
+The remaining gate is runtime/pane adoption and native session-changing commands,
+including a proven startup deadline policy under host scheduling pressure. No
+claim is made that a guard in a dead or indefinitely stalled host can contain the
+native process. Issue #3 stays open through that integration work.

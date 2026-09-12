@@ -82,17 +82,18 @@ native error does release it without claiming prior effects were undone.
 Tracked in grok-code-headless#3. Independent source audits found no supported
 connect-only TUI option: the pager reconnects with connect_or_spawn, can spawn a
 replacement immediately after leader death, and can fall back to an embedded
-agent after initial connection timeout. This is source-backed; a deliberate
-installed-binary crash/respawn experiment has not been run. Normal cleanup is
-verified, but is not crash containment.
+agent after initial connection timeout. That source-backed finding now has a
+guard implementation and scoped installed-binary fault evidence; see
+native-tui-crash-guard.md and testing/fixtures/native-tui-guard-proof.json.
 
 The owner now requires dependent TUI exit before terminating its leader. Failed
 dependent cleanup retains that owned leader and permits explicit cleanup retry;
 it never adopts a replacement PID. App integration remains blocked on an agreed,
-verified lifetime boundary for unexpected loss and native session changes. A
-stable app-owned TUI socket boundary is a possible next design to evaluate, not
-an implemented or verified guarantee. Do not enable the app provider from the
-normal-path proof alone.
+verified runtime/pane adoption and native session changes. The stable TUI socket
+boundary now passes failed-attachment, idle-SIGKILL and mid-turn-SIGKILL proofs
+with independently verified test-only OS no-fork containment. Dead/stalled-host
+behavior and native session-changing commands remain outside those results.
+Do not enable the app provider from the transport proof alone.
 
 The current terminal-gated submission prototype is not a general text-only
 transport and must not enable the app provider. Its recorded frame/ownership

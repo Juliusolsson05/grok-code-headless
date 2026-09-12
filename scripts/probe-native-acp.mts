@@ -15,9 +15,16 @@ import { HeadlessTerminal } from '../src/terminal/HeadlessTerminal.js'
 import { GrokNativeControl, type GrokMcpServer } from '../src/control/GrokNativeControl.js'
 import { GrokAcpError, type GrokAcpServerRequest } from '../src/control/GrokAcpClient.js'
 import { detectCommandPermission } from '../src/conditions/commandPermission.js'
+import { GrokTuiSocketGuard } from '../src/control/GrokTuiSocketGuard.js'
 
 if (process.env.GROK_ACP_PROBE !== '1') throw new Error('Set GROK_ACP_PROBE=1 for isolated native protocol verification')
 const binary = process.env.GROK_BINARY ?? join(homedir(), '.local', 'bin', 'grok')
+const faultMode = process.env.GROK_ACP_GUARD_FAULT
+const noFork = process.env.GROK_ACP_TUI_NO_FORK === '1'
+if (faultMode && (!['attach', 'idle', 'mid-turn'].includes(faultMode) || !noFork || process.env.GROK_ACP_TUI_GUARD !== '1')) {
+  throw new Error('Native fault proof requires the guard and verified OS no-fork containment')
+}
+const noForkProfile = '(version 1) (allow default) (deny process-fork)'
 const root = await mkdtemp(join(tmpdir(), 'g-acp-'))
 const home = join(root, 'home')
 await mkdir(home)
@@ -26,6 +33,9 @@ const wire = await readFile(new URL('../testing/fixtures/streaming/native-papaya
 const firstText = 'Fixture text only.\n\tKeep literal spacing.'
 const secondText = 'Second fixture message.\n\tKeep literal spacing.'
 const permissionText = 'Request the controlled permission fixture.'
+const faultText = 'Hold this controlled fault-test turn.'
+let faultRequestSeen = false
+let faultInjected = false
 const responseFrames = wire.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)))
 const createdResponse = responseFrames.find(frame => frame.type === 'response.created').response
 const completedResponse = responseFrames.find(frame => frame.type === 'response.completed').response
@@ -44,7 +54,9 @@ const evidence = { version: '', initialized: false, created: false, exactBackend
   unexpectedImages: 0, mcpRequests: 0, mcpCalls: 0, mcpToolAdvertised: false, searchToolAdvertised: false, tuiSawReplay: false, tuiSawLive: false,
   methods: [] as string[], serverRequests: [] as string[], notifications: {} as Record<string, number>, echoContainsText: false,
   rpcErrorCategories: [] as string[], mcpStates: [] as unknown[], mcpMethods: [] as string[],
-  tuiSawPermission: false, permissionCancelled: false, mcpIsolated: false, tuiAnsweredPermission: false, stalePermissionRefused: false }
+  tuiSawPermission: false, permissionCancelled: false, mcpIsolated: false, tuiAnsweredPermission: false, stalePermissionRefused: false,
+  tuiSocketGuard: process.env.GROK_ACP_TUI_GUARD === '1', noForkVerified: false,
+  faultMode: faultMode ?? null, guardHoldReason: null as string | null, faultContained: false, heldWithoutReconnect: false }
 const server = createServer(async (request, response) => {
   if (request.url === '/mcp' && request.method !== 'POST') {
     // Stateless Streamable HTTP explicitly declines the optional GET stream.
@@ -106,6 +118,12 @@ const server = createServer(async (request, response) => {
         }
       }
       inspectTools(body.tools)
+      if (faultMode === 'mid-turn' && texts.some(text => text.includes(faultText))) {
+        faultRequestSeen = true
+        response.writeHead(200, { 'content-type': 'text/event-stream' })
+        response.write(`event: response.created\ndata: ${JSON.stringify({ type: 'response.created', sequence_number: 0, response: createdResponse })}\n\n`)
+        return // The owned worker is killed while this turn is genuinely outstanding.
+      }
       if (texts.some(text => text.includes(permissionText))) {
         const reply = permissionToolSent ? wire : toolWire
         permissionToolSent = true
@@ -125,6 +143,7 @@ let viewerExited = false
 let permissionRequest: GrokAcpServerRequest | undefined
 let terminal: HeadlessTerminal | undefined
 let control: GrokNativeControl | undefined
+let viewerGuard: GrokTuiSocketGuard | undefined
 const waitUntil = async (predicate: () => boolean, label: string, timeout = 20000) => {
   const deadline = Date.now() + timeout
   while (!predicate() && Date.now() < deadline) {
@@ -157,9 +176,29 @@ try {
     GROK_MODELS_BASE_URL: base, GROK_XAI_API_BASE_URL: base, GROK_CLI_CHAT_PROXY_BASE_URL: base,
     GROK_CONTEXTUAL_HINTS: '0', GROK_PROMPT_SUGGESTIONS: '0', OTEL_TRACES_EXPORTER: 'none', OTEL_METRICS_EXPORTER: 'none' }
   evidence.version = execFileSync(binary, ['--version'], { env, encoding: 'utf8' }).trim()
+  if (noFork) {
+    // Verify the OS boundary independently before trusting it to contain a
+    // broken guard's replacement leader (which native puts in a new group).
+    // This applies only to the disposable TUI fixture, never user sessions.
+    execFileSync('/usr/bin/sandbox-exec', ['-p', noForkProfile, process.execPath, '-e',
+      "const r=require('node:child_process').spawnSync('/usr/bin/true');process.exit(r.error?.code==='EPERM'?0:1)"], { env, stdio: 'ignore' })
+    evidence.noForkVerified = true
+  }
   control = await GrokNativeControl.start({ binary, cwd: root, env, inheritEnv: false, model: 'grok-4.6',
     relayUrl: `ws://127.0.0.1:${address.port}/disabled`, relayOrigin: `http://127.0.0.1:${address.port}`,
-    beforeClose: closeViewer, onClose: () => { processFailure = true },
+    beforeClose: async () => {
+      if (viewerGuard) await viewerGuard.dispose(async () => {
+        if (faultInjected) {
+          // Give native reconnect enough time to become observable, while the
+          // OS independently forbids escaped descendants. The guard must hold
+          // the original connection, not win a race by instantly killing TUI.
+          await delay(1000)
+          evidence.heldWithoutReconnect = !viewerExited && viewerGuard!.connectionCount === 1 && viewerGuard!.state === 'holding'
+        }
+        await closeViewer()
+      })
+      else await closeViewer()
+    }, onClose: () => { processFailure = true },
     onRequest: request => {
       evidence.serverRequests.push(request.method)
       if (request.method !== 'session/request_permission') throw new Error('Unexpected native request')
@@ -200,9 +239,27 @@ try {
   await control.loadSession(session.sessionId, mcpServers)
   evidence.methods.push('session/load')
   const native = createRequire(import.meta.url)('node-pty') as typeof import('node-pty')
-  viewer = native.spawn(binary, ['--no-auto-update', '--fullscreen', '--leader', '--leader-socket', control.socketPath, '--resume', session.sessionId], { cwd: root, env: { ...env, TERM: 'xterm-256color' }, cols: 120, rows: 40, name: 'xterm-256color' })
+  if (evidence.tuiSocketGuard) {
+    viewerGuard = await GrokTuiSocketGuard.create({ upstreamPath: faultMode === 'attach' ? join(root, 'unavailable.sock') : control.socketPath, expectedPid: control.pid!, onFault: reason => {
+      evidence.guardHoldReason ??= reason
+      if (reason !== 'owner-stopped') processFailure = true
+      void control?.dispose().catch(() => { processFailure = true })
+    } })
+  }
+  if (control.isClosed) throw new Error('Owned control closed before TUI attachment')
+  const viewerArgs = ['--no-auto-update', '--fullscreen', '--leader', '--leader-socket', viewerGuard?.socketPath ?? control.socketPath, '--resume', session.sessionId]
+  faultInjected = faultMode === 'attach'
+  viewer = native.spawn(noFork ? '/usr/bin/sandbox-exec' : binary,
+    noFork ? ['-p', noForkProfile, binary, ...viewerArgs] : viewerArgs,
+    { cwd: root, env: { ...env, TERM: 'xterm-256color' }, cols: 120, rows: 40, name: 'xterm-256color' })
   viewer.onExit(() => { viewerExited = true })
   terminal = new HeadlessTerminal({ pty: viewer, cols: 120, rows: 40 }); terminal.attach()
+  if (faultMode === 'attach') {
+    await waitUntil(() => evidence.guardHoldReason !== null, 'guard observes failed attachment')
+    await control.dispose()
+    evidence.faultContained = viewerExited && viewerGuard?.state === 'disposed' && evidence.heldWithoutReconnect
+    if (!evidence.faultContained) throw new Error('Native attachment failure was not contained')
+  } else {
   await waitUntil(() => terminal!.snapshotPlain().includes('PAPAYA'), 'TUI replay')
   evidence.tuiSawReplay = true
   try { await control.updateMcpServers(session.sessionId, mcpServers) }
@@ -256,6 +313,26 @@ try {
   } catch (error) { evidence.mcpIsolated = !otherHasFixture && error instanceof GrokAcpError && error.rpcCode === -32603 }
   await rpc('_x.ai/mcp/call', { sessionId: session.sessionId, server: 'fixture', tool: 'fixture_echo', arguments: {} })
   if (!evidence.exactBackendText || !evidence.exactUserEcho || !evidence.mcpCalls || !evidence.permissionCancelled || !evidence.mcpIsolated || evidence.unexpectedImages) throw new Error('Native control evidence incomplete')
+  if (faultMode) {
+    let pending: Promise<unknown> | undefined
+    if (faultMode === 'mid-turn') {
+      pending = control.prompt(session.sessionId, faultText).catch(error => error)
+      await waitUntil(() => faultRequestSeen, 'outstanding native inference')
+    }
+    const ownedPid = control.pid
+    if (!ownedPid) throw new Error('Missing owned leader at fault boundary')
+    faultInjected = true
+    process.kill(ownedPid, 'SIGKILL')
+    await waitUntil(() => control!.isClosed, 'automatic control failure fence')
+    await control.dispose()
+    if (pending) {
+      const outcome = await pending
+      if (!(outcome instanceof GrokAcpError) || !outcome.uncertain) throw new Error('Lost native turn was not reported uncertain')
+    }
+    evidence.faultContained = viewerExited && viewerGuard?.state === 'disposed' && evidence.heldWithoutReconnect
+    if (!evidence.faultContained) throw new Error('Native leader loss was not contained')
+  }
+  }
 } catch (error) {
   console.log(JSON.stringify(evidence, null, 2))
   throw error
@@ -266,10 +343,12 @@ try {
       await control.dispose()
       // Absence is a read-only check, not authority to adopt/kill a discovered
       // PID. A surviving native replacement makes this proof fail.
-      let found = false
-      try { execFileSync('pgrep', ['-f', control.socketPath], { stdio: 'ignore' }); found = true }
-      catch (error) { if ((error as { status?: number }).status !== 1) throw new Error('Cannot verify native process cleanup') }
-      if (found) throw new Error('Native process survived owned control cleanup')
+      for (const path of [control.socketPath, ...(viewerGuard ? [viewerGuard.socketPath] : [])]) {
+        let found = false
+        try { execFileSync('pgrep', ['-f', path], { stdio: 'ignore' }); found = true }
+        catch (error) { if ((error as { status?: number }).status !== 1) throw new Error('Cannot verify native process cleanup') }
+        if (found) throw new Error('Native process survived owned control cleanup')
+      }
     } else await closeViewer()
     cleanupVerified = true
   } finally {
