@@ -88,6 +88,12 @@ const COUNTER_KEYS = new Set([
   'schema_version', 'status', 'succeeded', 'target_prompt_index', 'timeout_sec', 'tool_count', 'tool_index', 'toolCallCount',
   'toolDefinitionsCount', 'total', 'total_lines', 'total_servers', 'total_tools', 'turn_number', 'turnCount', 'turnIndex', 'turns', 'usagePct',
   'version', 'width', 'writeId', 'x.ai/leaderClientId',
+  // Harness verification counts of the prompt-identity and terminal new-session
+  // scenarios. Their magnitude is the evidence (33 original-session updates
+  // reaching the terminal is not the same finding as 1), and they are small
+  // integers computed by the harness, never native content.
+  'queueNotifications', 'completionNotifications', 'originalUpdatesToTerminalBeforePrompt',
+  'originalUpdatesToTerminalDuringPrompt', 'otherSessionUpdatesToTerminal',
 ])
 /** History byte offsets. They depend on content length, which normalization
  * changes, so deriveTimeline replaces them with ranks within one (session, file,
@@ -313,6 +319,7 @@ export const CORPUS_LIMITS = [
   'Decoded leader frames are attached to the event whose chunk completed them, so an event may carry an empty frame list.',
   'Ordering is observer arrival order within one capture, not native causality.',
   'Captures whose storage cannot be verified are not samples of native behaviour; they are counted only in unverifiableCaptures.',
+  'Per-version capture counts are keyed by scenario id alone, so they include captures made by earlier revisions of that scenario\'s recorder code; a failed or refused count can describe a harness step that was later corrected rather than native behaviour.',
 ]
 
 /**
@@ -384,8 +391,8 @@ export async function deriveControlledRuntimeFixtures(source: string, output?: s
     })
   }
   manifest.coverageGaps.push({
-    agenda: 'cancellation before delivery',
-    reason: 'no registered scenario issues a cancel before native has accepted the prompt; cancel-inference covers cancellation while inference is outstanding',
+    agenda: 'cancellation racing the first prompt write',
+    reason: 'no registered scenario issues a cancel before native has accepted the prompt at all; cancel-inference covers an outstanding inference and cancel-queued-prompt a prompt already accepted into the native queue',
   })
 
   if (outputRoot) {

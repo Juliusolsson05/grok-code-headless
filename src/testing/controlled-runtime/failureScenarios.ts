@@ -132,6 +132,7 @@ export const failureScenarios: CaptureScenario[] = [
         acp = context.prompt(acpText).catch(error => ({ error: outcome(error) }))
       }
       await context.waitFor(() => context.notifications.some(event => event.method === '_x.ai/queue/changed' && hasText(event.params, order === 'acp-then-tui' ? tuiText : acpText)), 'second submission queue evidence')
+      context.capture.record('action', 'cancel-requested', { sessionId: context.sessionId })
       await context.control.rpc.notify('session/cancel', { sessionId: context.sessionId })
       const acpOutcome = await acp
       await context.waitFor(() => context.backend.requests.some(body => hasText(body.input, acpText)) && context.backend.requests.some(body => hasText(body.input, tuiText)), 'both inference inputs')
@@ -196,6 +197,188 @@ export const failureScenarios: CaptureScenario[] = [
       const restored = await context.call('_x.ai/mcp/call', { sessionId: context.sessionId, server: 'fixture', serverUrl: context.backend.baseUrl + '/mcp', tool: 'fixture_echo', arguments: { text: 'restored' } })
       context.capture.record('verification', 'mcp-restored', { restored })
       await context.checkpoint('after-mcp-restore')
+    } },
+  { id: 'client-supplied-prompt-identity', description: 'Control prompt carrying a client-chosen _meta.promptId, to learn whether native adopts it', targets: ['prompt-identity', 'acceptance-correlation'],
+    async run(context) {
+      // WHY recorded rather than assumed: a prompt can only be correlated with its
+      // native acceptance before completion if native reports an identity the
+      // client already knows. The TUI supplies _meta.promptId; the control prompts
+      // in every other scenario do not, so whether native honours a client-chosen
+      // id is an open Stage 2 question. Adoption and non-adoption are both
+      // evidence, so this records the observation instead of asserting either.
+      const promptId = randomUUID()
+      const result = await context.call('session/prompt', {
+        sessionId: context.sessionId, prompt: [{ type: 'text', text: 'Controlled prompt with a client-chosen identity.' }], _meta: { promptId },
+      })
+      if (typeof result?.stopReason !== 'string') throw new Error('Client-identified prompt has no native completion')
+      // The result above is native's completion. The completion notification is
+      // observed for a bounded moment, not required: a run without it is evidence
+      // too, and the notification counts below keep "not adopted" distinguishable
+      // from "never notified".
+      await context.waitFor(() => context.notifications.some(event => event.method === '_x.ai/session/prompt_complete'), 'native prompt completion notification', 5000).catch(() => {})
+      const queueChanges = context.notifications.filter(event => event.method === '_x.ai/queue/changed').map(event => event.params as any)
+      const completions = context.notifications.filter(event => event.method === '_x.ai/session/prompt_complete').map(event => event.params as any)
+      context.capture.record('verification', 'client-prompt-identity', {
+        // Earliest acceptance point: the waiting entry native lists before the
+        // prompt runs. The public corpus numbers queue entry ids and prompt ids in
+        // separate ordinal families, so only this boolean carries the comparison.
+        adoptedAsQueueEntry: queueChanges.some(params => (params?.entries ?? []).some((entry: any) => entry?.id === promptId)),
+        adoptedAsRunning: queueChanges.some(params => params?.runningPromptId === promptId),
+        adoptedAsCompleted: completions.some(params => params?.promptId === promptId),
+        adoptedInResult: result?._meta?.promptId === promptId,
+        queueNotifications: queueChanges.length, completionNotifications: completions.length,
+      })
+      await context.checkpoint('after-client-prompt-identity')
+    } },
+  { id: 'cancel-queued-prompt', description: 'Session cancel while a second control prompt is queued behind a held running turn', targets: ['cancel', 'queued-prompt', 'cancel-with-queued-prompt'],
+    async run(context) {
+      // WHY this is not "cancel before delivery": the second prompt has already
+      // been accepted into native's queue when the cancel is sent, and
+      // session/cancel names the session, not a prompt. What this records is
+      // whether a session cancel also retires queued work; a cancel racing the
+      // first prompt write remains a coverage gap in the corpus manifest.
+      const runningText = 'CONTROLLED_RUNNING_BEFORE_CANCEL'
+      const queuedText = 'CONTROLLED_QUEUED_BEFORE_CANCEL'
+      // Client-chosen ids (see client-supplied-prompt-identity) let the queue
+      // notifications say which prompt was running and which was waiting, rather
+      // than inferring it from text that native also copies into runningText once
+      // a prompt starts.
+      const runningId = randomUUID()
+      const queuedId = randomUUID()
+      // Only the main turn advertises native tools. Title and other sidecar
+      // requests can carry the same prompt text without them; a text-only selector
+      // could hold a sidecar while the real turn ran to completion, and the record
+      // would then show the queued prompt as the one the cancel hit.
+      const mainTurn = (body: any) => context.backend.advertisedToolNames(body).includes('run_terminal_command')
+      let held = false
+      context.backend.handler = body => {
+        if (!held && mainTurn(body) && hasText(body.input, runningText)) { held = true; return { kind: 'hold' } }
+        return { kind: 'text', text: 'FIXTURE_AFTER_CANCEL' }
+      }
+      const send = (text: string, promptId: string) => context.call('session/prompt', { sessionId: context.sessionId, prompt: [{ type: 'text', text }], _meta: { promptId } })
+      // Each prompt is settled into a record; the control client's RPC deadline
+      // bounds a prompt native never answers, so this cannot hang the batch.
+      const settle = (turn: Promise<any>): Promise<{ result?: any; error?: ReturnType<typeof outcome> }> =>
+        turn.then(result => ({ result }), error => ({ error: outcome(error) }))
+      let runningSettled = false
+      const running = settle(send(runningText, runningId)).finally(() => { runningSettled = true })
+      await context.waitFor(() => held, 'held running inference')
+      const queued = settle(send(queuedText, queuedId))
+      const queueChanges = () => context.notifications.filter(event => event.method === '_x.ai/queue/changed').map(event => event.params as any)
+      // Queued means listed among the waiting entries while the held prompt has
+      // not settled. Matching the text anywhere in the notification would also
+      // accept runningText, i.e. a "queued" prompt that had already started.
+      await context.waitFor(() => !runningSettled && queueChanges().some(params => hasText(params?.entries ?? [], queuedText)), 'queued prompt listed behind the held turn')
+      const changesAtCancel = queueChanges()
+      const queueAtCancel = changesAtCancel[changesAtCancel.length - 1]
+      const runningSettledBeforeCancel = runningSettled
+      context.capture.record('action', 'cancel-requested', { sessionId: context.sessionId })
+      await context.control.rpc.notify('session/cancel', { sessionId: context.sessionId })
+      const [runningOutcome, queuedOutcome] = await Promise.all([running, queued])
+      context.capture.record('verification', 'cancel-queued-outcome', {
+        runningOutcome, queuedOutcome, runningSettledBeforeCancel, queueAtCancel,
+        runningReportedWithClientId: queueChanges().some(params => params?.runningPromptId === runningId),
+        queuedEntryUsesClientId: queueChanges().some(params => (params?.entries ?? []).some((entry: any) => entry?.id === queuedId)),
+        // A main-turn request carrying the queued text: the held turn's input never
+        // contains it, and sidecars do not advertise native tools.
+        queuedInferenceObserved: context.backend.requests.some(body => mainTurn(body) && hasText(body.input, queuedText)),
+      })
+      // Only a result or a JSON-RPC error answer (code 'remote' with a numeric
+      // rpcCode) came from native. Every other settlement was produced locally:
+      // the harness deadline, a connection closed before or after the write, a
+      // capacity refusal or an abort. The control client's uncertain flag cannot
+      // separate the two, because it marks native error answers uncertain and
+      // some local refusals certain. The record above keeps whatever happened; a
+      // capture whose outcome native never produced must not verify as a
+      // recorded cancellation result.
+      const answeredByNative = (settled: { result?: unknown; error?: ReturnType<typeof outcome> }) =>
+        'result' in settled || (settled.error?.code === 'remote' && typeof settled.error.rpcCode === 'number')
+      if (!answeredByNative(runningOutcome) || !answeredByNative(queuedOutcome)) throw new Error('A prompt around the session cancel was settled locally, not answered by native')
+      await context.checkpoint('after-cancel-queued-prompt')
+    } },
+  { id: 'tui-new-session', description: 'The native TUI requests and displays a new session with /new while the owned control client keeps prompting the original session', targets: ['session-change', 'tui-initiated', 'session-identity'],
+    async run(context) {
+      // WHY this exists: the approved ownership rule fences input when the native
+      // terminal moves to another conversation, but no capture showed what a
+      // terminal-initiated change looks like on the wire. `/new` is taken from
+      // the installed 1.0.30 command table ("Start a new session"); `/resume`
+      // opens an interactive picker and `/fork` can create worktrees, so `/new`
+      // is the deterministic first case. Only the original session's native
+      // files are observed. The new session exists in the capture only as the
+      // terminal's own session/new answer and its later traffic; no control
+      // announcement of it has been recorded.
+      //
+      // WHY it measures what the terminal is fed, not only what it shows: in the
+      // reviewed first timeline the terminal showed the new id while native kept
+      // streaming the original session's updates to it. "Shows another session"
+      // therefore cannot mean "left the original session", so the record counts
+      // the original session's updates written to the terminal and samples
+      // whether the original session's distinct reply is drawn.
+      const afterText = 'Controlled prompt to the original session after the terminal requested a new one.'
+      const afterReply = 'FIXTURE_ORIGINAL_REPLY_AFTER_TERMINAL_NEW'
+      // The distinct reply goes only to the main turn: a sidecar title carrying it
+      // could be painted as a heading and read as the reply being drawn.
+      context.backend.handler = body => ({ kind: 'text',
+        text: context.backend.advertisedToolNames(body).includes('run_terminal_command') && hasText(body.input, afterText) ? afterReply : 'FIXTURE_REPLY' })
+      const before = await context.prompt('Controlled prompt before the native terminal starts a new session.')
+      if (typeof before?.stopReason !== 'string') throw new Error('Original session prompt has no native completion')
+      const announced = (event: { method: string; params?: unknown }) => event.method === '_x.ai/sessions/changed' &&
+        ((event.params as any)?.upserted ?? []).some((session: any) => typeof session?.sessionId === 'string' && session.sessionId !== context.sessionId)
+      await context.checkpoint('before-tui-new-session')
+      const newSessionRequestsBefore = context.tuiSentMethodCounts.get('session/new') ?? 0
+      context.tui!.write('/new')
+      await context.waitFor(() => context.terminal!.snapshotPlain().includes('/new'), 'typed native /new command')
+      context.tui!.write('\r')
+      // The first 1.0.30 recording showed the terminal requesting session/new on
+      // its own connection and painting the new session id, while nothing was
+      // announced to the control client before the deadline. Wait on the
+      // terminal's own request and the new id it shows, never on a notification
+      // the recording did not contain.
+      await context.waitFor(() => (context.tuiSentMethodCounts.get('session/new') ?? 0) > newSessionRequestsBefore, 'native terminal session/new request')
+      // Windows of the original session's updates written to the terminal: from
+      // its session/new request to the control prompt, then during that prompt.
+      // Trailing updates of the completed first prompt can still land in the first
+      // window, which is why the two are recorded separately.
+      const originalUpdates = () => context.tuiSessionUpdateWrites.get(context.sessionId) ?? 0
+      const otherSessionUpdates = () => [...context.tuiSessionUpdateWrites].reduce((sum, [sessionId, count]) => sessionId === context.sessionId ? sum : sum + count, 0)
+      const originalAtNewRequest = originalUpdates()
+      const showsOtherSession = () => [...context.terminal!.snapshotPlain().matchAll(/Session ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g)]
+        .some(match => match[1] !== context.sessionId)
+      await context.waitFor(showsOtherSession, 'native terminal showing a different session')
+      await context.checkpoint('after-tui-new-session')
+      const originalAtPrompt = originalUpdates()
+      // Settled rather than awaited: native refusing or fencing the original
+      // session after the terminal's /new is the variant this scenario most needs
+      // to keep, so the record is written before any failure is raised.
+      const after: { result?: any; error?: ReturnType<typeof outcome> } = await context.prompt(afterText).then(result => ({ result }), error => ({ error: outcome(error) }))
+      const originalAfterPrompt = originalUpdates()
+      const completed = typeof after.result?.stopReason === 'string'
+      // Bounded sample: a terminal that never draws the original session's reply
+      // is evidence too, not a failed stimulus. Without a completion there is no
+      // reply to look for, so the record says "not sampled" (null) rather than
+      // "not drawn" (false).
+      const drewOriginalReply = completed
+        ? await context.waitFor(() => context.terminal!.snapshotPlain().includes(afterReply), 'original session reply drawn on the terminal', 5000).then(() => true, () => false)
+        : null
+      context.capture.record('verification', 'tui-new-session-outcome', {
+        terminalRequestedNewSession: true, terminalShowsOtherSession: showsOtherSession(),
+        newSessionAnnouncedToControl: context.notifications.some(announced),
+        originalUpdatesToTerminalBeforePrompt: originalAtPrompt - originalAtNewRequest,
+        originalUpdatesToTerminalDuringPrompt: originalAfterPrompt - originalAtPrompt,
+        otherSessionUpdatesToTerminal: otherSessionUpdates(),
+        terminalDrewOriginalReply: drewOriginalReply,
+        originalPromptOutcome: after,
+      })
+      // A native error answer (code 'remote' with a numeric rpcCode) is the
+      // refusal/fence variant this scenario exists to keep, so it passes and is
+      // published like a completion. Anything else was settled locally (the
+      // harness deadline, a closed connection, a capacity refusal, an abort) and
+      // fails the capture. The control client's uncertain flag cannot make that
+      // distinction: it marks native error answers uncertain and some local
+      // refusals certain.
+      const answeredByNative = 'result' in after || (after.error?.code === 'remote' && typeof after.error.rpcCode === 'number')
+      if (!answeredByNative) throw new Error('Original session prompt after the terminal requested a new session was settled locally, not answered by native')
+      await context.checkpoint('after-original-session-prompt')
     } },
   { id: 'native-restart-resume', description: 'Owned leader and TUI exit followed by a fresh native epoch loading the same disposable session', targets: ['restart', 'resume', 'session-identity'],
     async run(context) {

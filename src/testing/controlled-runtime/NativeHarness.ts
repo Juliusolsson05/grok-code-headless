@@ -33,6 +33,20 @@ export class NativeHarness {
   readonly requests: GrokAcpServerRequest[] = []
   readonly notifications: Array<{ method: string; params?: unknown }> = []
   readonly openConnections = new Set<string>()
+  // Messages the native TUI itself sends on its own connection, requests and
+  // notifications alike, counted by method name for the current TUI epoch.
+  // Scenarios that drive the terminal (for example a slash command) wait on these
+  // instead of assuming a control notification exists: in the recorded 1.0.30
+  // `/new` run the terminal sent session/new here, and nothing naming the new
+  // session reached the control client through the control prompt that followed.
+  readonly tuiSentMethodCounts = new Map<string, number>()
+  // session/update frames written toward the TUI, counted by the session id they
+  // carry, for the current TUI epoch. WHY: in the reviewed 1.0.30 `/new` timeline
+  // a terminal that requested and displayed a new session was still streamed the
+  // original session's updates, so what the screen shows cannot say which
+  // conversation the terminal is fed. These are write attempts, not deliveries;
+  // EvidenceVerification owns write receipts.
+  readonly tuiSessionUpdateWrites = new Map<string, number>()
   control!: GrokNativeControl
   backend!: FixtureBackend
   guard?: GrokTuiSocketGuard
@@ -246,7 +260,7 @@ export class NativeHarness {
     if (!pid || this.control.isClosed) throw new Error('Owned leader closed before TUI creation')
     // Each TUI epoch gets fresh connections; state and splitters from the closed
     // epoch must neither satisfy nor leak into the next one.
-    this.tuiLoaded = false; this.tuiReplayObserved = false; this.pendingLoads.clear(); this.decoders.clear(); this.tuiExited = false
+    this.tuiLoaded = false; this.tuiReplayObserved = false; this.pendingLoads.clear(); this.decoders.clear(); this.tuiSentMethodCounts.clear(); this.tuiSessionUpdateWrites.clear(); this.tuiExited = false
     this.guard = await GrokTuiSocketGuard.create({ upstreamPath: this.control.socketPath, expectedPid: pid,
       onTransportObservation: event => this.transport(event),
       onFault: reason => { this.capture.record('guard', 'holding', { reason }); void this.control?.dispose().catch(() => {}) },
@@ -300,9 +314,12 @@ export class NativeHarness {
       const id = rpc?.id === undefined ? undefined : JSON.stringify(rpc.id)
       const pending = this.pendingLoads.get(event.connectionId)
       if (event.kind === 'received') {
+        if (typeof rpc?.method === 'string') this.tuiSentMethodCounts.set(rpc.method, (this.tuiSentMethodCounts.get(rpc.method) ?? 0) + 1)
         if (rpc?.method === 'session/load' && rpc.params?.sessionId === this.sessionId && id !== undefined) this.pendingLoads.set(event.connectionId, id)
         continue
       }
+      const updated = rpc?.method === 'session/update' ? rpc.params?.sessionId : undefined
+      if (typeof updated === 'string') this.tuiSessionUpdateWrites.set(updated, (this.tuiSessionUpdateWrites.get(updated) ?? 0) + 1)
       if (pending === undefined) continue
       if (rpc?.method === 'session/update' && rpc.params?.sessionId === this.sessionId && rpc.params?.update?.sessionUpdate === 'user_message_chunk') {
         this.tuiReplayObserved = true

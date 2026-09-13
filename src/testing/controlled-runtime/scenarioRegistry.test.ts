@@ -27,6 +27,9 @@ describe('controlled-runtime scenario registry', () => {
       'native-restart-resume',
       'native-startup-failure',
       'cleanup-retry-native',
+      'client-supplied-prompt-identity',
+      'cancel-queued-prompt',
+      'tui-new-session',
     ]))
     expect(registered.every(scenario => scenario.targets.length > 0)).toBe(true)
   })

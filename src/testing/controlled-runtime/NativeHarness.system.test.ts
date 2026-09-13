@@ -122,6 +122,8 @@ describe('NativeHarness TUI wire observation', () => {
       openConnections: new Set(),
       decoders: new Map(),
       pendingLoads: new Map(),
+      tuiSentMethodCounts: new Map(),
+      tuiSessionUpdateWrites: new Map(),
       sessionId: SESSION,
       tuiLoaded: false,
       tuiReplayObserved: false,
@@ -131,8 +133,39 @@ describe('NativeHarness TUI wire observation', () => {
       kind, role: 'tui', connectionId, bytes: acp(message), ...(kind === 'write-attempt' ? { writeId: ++writeId } : {}),
     })
     const state = () => ({ loaded: (context as any).tuiLoaded, replayed: (context as any).tuiReplayObserved })
-    return { see, state }
+    return {
+      see, state,
+      sent: (context as any).tuiSentMethodCounts as Map<string, number>,
+      updates: (context as any).tuiSessionUpdateWrites as Map<string, number>,
+    }
   }
+
+  it('counts the messages the native TUI sends on its own connection, by method, and nothing it is sent', () => {
+    // Scenarios that drive the terminal (for example `/new`) wait on these
+    // counts; a count that also included leader-to-TUI traffic would let a
+    // scenario proceed before the terminal itself asked for anything.
+    const { see, sent } = observer()
+    see('received', { jsonrpc: '2.0', id: 7, method: 'session/new', params: {} })
+    see('received', { jsonrpc: '2.0', method: '_x.ai/log', params: {} })
+    see('received', { jsonrpc: '2.0', method: '_x.ai/log', params: {} })
+    see('write-attempt', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: SESSION, update: { sessionUpdate: 'agent_message_chunk' } } })
+    see('write-attempt', { jsonrpc: '2.0', id: 7, result: { sessionId: SESSION } })
+    expect(Object.fromEntries(sent)).toEqual({ 'session/new': 1, '_x.ai/log': 2 })
+  })
+
+  it('counts session updates written to the TUI by the session id they carry, and none the TUI sends', () => {
+    // tui-new-session compares the original session's count around the
+    // terminal's own session/new. Attributing an update to the wrong session, or
+    // counting the terminal's own traffic, would invert what that scenario records.
+    const { see, updates } = observer()
+    const OTHER = '00000000-0000-4000-8000-000000000002'
+    see('write-attempt', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: SESSION, update: { sessionUpdate: 'agent_message_chunk' } } })
+    see('write-attempt', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: SESSION, update: { sessionUpdate: 'agent_thought_chunk' } } })
+    see('write-attempt', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: OTHER, update: { sessionUpdate: 'available_commands_update' } } })
+    see('write-attempt', { jsonrpc: '2.0', id: 9, result: { sessionId: OTHER } })
+    see('received', { jsonrpc: '2.0', method: 'session/update', params: { sessionId: OTHER, update: { sessionUpdate: 'agent_message_chunk' } } })
+    expect(Object.fromEntries(updates)).toEqual({ [SESSION]: 2, [OTHER]: 1 })
+  })
 
   it('observes a load and its replay from decoded frames while the load is pending', () => {
     const { see, state } = observer()

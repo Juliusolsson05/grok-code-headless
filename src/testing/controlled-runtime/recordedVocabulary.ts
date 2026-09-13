@@ -23,6 +23,18 @@ export const RECORDED_PROTOCOL_KEYS: ReadonlySet<string> = new Set([
   // Harness terminal checkpoint key; the corpus survey skipped terminal events,
   // whose only other kept fields are the numeric geometry keys listed below.
   "frame",
+  // Native fields first recorded by the terminal-initiated `/new` scenario: the
+  // TUI's own `_x.ai/commands/list` result and a native log context.
+  "commands", "sources", "mcp_server_count",
+  // Verification record fields of the prompt-identity, queued-cancel and
+  // terminal new-session scenarios. Names only; their values still pass through
+  // the normal value rules.
+  "adoptedAsQueueEntry", "adoptedAsRunning", "adoptedAsCompleted", "adoptedInResult", "queueNotifications", "completionNotifications",
+  "runningOutcome", "queuedOutcome", "queuedInferenceObserved", "runningSettledBeforeCancel", "queueAtCancel",
+  "runningReportedWithClientId", "queuedEntryUsesClientId",
+  "terminalRequestedNewSession", "terminalShowsOtherSession", "newSessionAnnouncedToControl",
+  "originalUpdatesToTerminalBeforePrompt", "originalUpdatesToTerminalDuringPrompt", "otherSessionUpdatesToTerminal",
+  "terminalDrewOriginalReply", "originalPromptOutcome",
   "Content", "EditsApplied", "Entered", "Error", "FileContent", "ImageContent", "Ok", "OkayOutput",
   "PlanReady", "TodosUpdated", "UserAnswered", "_meta", "absolute_path", "absolute_root_path", "acpOutcome",
   "actionId", "action_registered", "activity", "added", "agentAddress", "agentCapabilities", "agentId",
@@ -139,7 +151,7 @@ export const RECORDED_ENUM_VALUES: Readonly<Record<string, ReadonlySet<string>>>
   "jsonrpc": new Set(["2.0"]),
   "kind": new Set(["Other", "allow_always", "allow_once", "ask_user", "build", "closed", "closing", "edit", "enter_plan", "execute", "exit_plan", "exited", "hold", "list", "local", "opened", "other", "permission", "plan", "plan_approval", "prompt", "question", "read", "received", "reject_always", "reject_once", "search", "search_tool", "spawned", "task", "text", "think", "tool", "use_tool", "write", "write-attempt", "write-complete"]),
   "lvl": new Set(["debug", "info", "warn"]),
-  "method": new Set(["GET", "POST", "_x.ai/ask_user_question", "_x.ai/billing", "_x.ai/bundle/status", "_x.ai/compact_conversation", "_x.ai/exit_plan_mode", "_x.ai/log", "_x.ai/mcp/call", "_x.ai/mcp/init_progress", "_x.ai/mcp/list", "_x.ai/mcp/server_status", "_x.ai/mcp/servers_updated", "_x.ai/mcp_initialized", "_x.ai/models/update", "_x.ai/prompt_history", "_x.ai/queue/changed", "_x.ai/rewind/execute", "_x.ai/rewind/points", "_x.ai/session/info", "_x.ai/session/prompt_complete", "_x.ai/session/update", "_x.ai/session/update_mcp_servers", "_x.ai/session_notification", "_x.ai/sessions/changed", "authenticate", "initialize", "session/cancel", "session/load", "session/new", "session/prompt", "session/request_permission", "session/update"]),
+  "method": new Set(["GET", "POST", "_x.ai/ask_user_question", "_x.ai/billing", "_x.ai/bundle/status", "_x.ai/commands/list", "_x.ai/compact_conversation", "_x.ai/exit_plan_mode", "_x.ai/log", "_x.ai/marketplace/list", "_x.ai/mcp/call", "_x.ai/mcp/init_progress", "_x.ai/mcp/list", "_x.ai/mcp/server_status", "_x.ai/mcp/servers_updated", "_x.ai/mcp_initialized", "_x.ai/models/update", "_x.ai/prompt_history", "_x.ai/queue/changed", "_x.ai/rewind/execute", "_x.ai/rewind/points", "_x.ai/session/info", "_x.ai/session/prompt_complete", "_x.ai/session/update", "_x.ai/session/update_mcp_servers", "_x.ai/session_notification", "_x.ai/sessions/changed", "authenticate", "initialize", "session/cancel", "session/load", "session/new", "session/prompt", "session/request_permission", "session/update"]),
   "method_id": new Set(["xai.api_key"]),
   "methodId": new Set(["xai.api_key"]),
   "mime_type": new Set(["image/png"]),
