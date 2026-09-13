@@ -285,6 +285,7 @@ export class HeadlessTerminal extends EventEmitter {
   private lastProviderPaintState: TerminalPaintState
   private exited = false
   private attached = false
+  private attachmentEpoch = 0
   private readonly snapshotIntervalMs: number
   // Stored disposables for the PTY listeners we wire in attach(). node-pty's
   // onData / onExit return objects with .dispose() — if we drop them on the
@@ -333,6 +334,7 @@ export class HeadlessTerminal extends EventEmitter {
   attach(): void {
     if (this.attached) return
     this.attached = true
+    const attachmentEpoch = ++this.attachmentEpoch
 
     this.ptyDataDisposable = this.pty.onData((data: string) => {
       this.emit('pty-data', data)
@@ -346,6 +348,12 @@ export class HeadlessTerminal extends EventEmitter {
       // asynchronous.
       const admittedLayoutEpoch = this.layoutEpoch
       this.term.write(data, () => {
+        // WHY an epoch rather than the attached boolean alone: dispose() is a
+        // final operation for current consumers, but attach() remains a public
+        // idempotent subscription API. A parse admitted by an older attachment
+        // can complete after a rapid dispose/attach pair and must not decrement
+        // the new attachment's counters or emit its stale frame as new output.
+        if (!this.attached || attachmentEpoch !== this.attachmentEpoch) return
         this.pendingWrites--
         this.parsedFrameGeneration++
         const parsedPaintState = this.capturePaintState()
@@ -371,7 +379,12 @@ export class HeadlessTerminal extends EventEmitter {
         // and we'd snapshot mid-parse. The throttle inside
         // scheduleFlush() coalesces multiple completions into one
         // snapshot per snapshotIntervalMs window.
-        if (this.pendingWrites === 0) this.scheduleFlush()
+        // WHY disposal must fence callbacks that xterm already owns: removing
+        // the PTY listener prevents new writes, but an admitted term.write()
+        // callback can still arrive afterward. Without this guard it creates a
+        // fresh timer after cleanup cleared the old one, so a supposedly dead
+        // mirror emits into a disposed consumer (and can outlive its recorder).
+        if (this.attached && this.pendingWrites === 0) this.scheduleFlush()
       })
     })
 
@@ -685,6 +698,10 @@ export class HeadlessTerminal extends EventEmitter {
       this.flushTimer = null
     }
     this.flushPending = false
+    // Already-admitted xterm callbacks are fenced by attachmentEpoch. Reset the
+    // count here so a future attachment does not wait on callbacks it does not
+    // own; those callbacks return before touching this new generation's count.
+    this.pendingWrites = 0
     // Tear down PTY listeners. node-pty disposables are idempotent —
     // calling dispose() after the PTY has already exited is safe.
     if (this.ptyDataDisposable) {

@@ -39,6 +39,46 @@ async function waitForFrame(
 }
 
 describe('HeadlessTerminal provider layout epochs', () => {
+  it('does not emit a delayed screen after disposal', async () => {
+    const controlled = controlledPty()
+    const terminal = new HeadlessTerminal({
+      pty: controlled.pty,
+      cols: 52,
+      rows: 24,
+      snapshotIntervalMs: 1,
+    })
+    let screens = 0
+    terminal.on('screen', () => screens++)
+    terminal.attach()
+
+    controlled.emitData('\x1b[2J\x1b[H› pending frame')
+    terminal.dispose()
+    await new Promise(resolve => setTimeout(resolve, 25))
+
+    expect(screens).toBe(0)
+  })
+
+  it('does not attribute a pre-disposal parse callback to a later attachment', async () => {
+    const controlled = controlledPty()
+    const terminal = new HeadlessTerminal({
+      pty: controlled.pty,
+      cols: 52,
+      rows: 24,
+      snapshotIntervalMs: 1,
+    })
+    let screens = 0
+    terminal.on('screen', () => screens++)
+    terminal.attach()
+
+    controlled.emitData('\x1b[2J\x1b[H› stale attachment frame')
+    terminal.dispose()
+    terminal.attach()
+    await new Promise(resolve => setTimeout(resolve, 25))
+
+    expect(screens).toBe(0)
+    terminal.dispose()
+  })
+
   it('keeps resized xterm geometry unacknowledged until later provider bytes parse', async () => {
     const controlled = controlledPty()
     const terminal = new HeadlessTerminal({
