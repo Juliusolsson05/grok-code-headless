@@ -56,7 +56,7 @@ export async function recordControlledRuntime(outputPath: string, selected: stri
       try {
         const captured = await NativeHarness.recordExpectedStartupFailure(output, scenario)
         report({ scenario: scenario.id, outcome: captured.manifest.scenarioOutcome, captureComplete: captured.manifest.captureComplete,
-          observations: captured.manifest.observations, bytes: captured.manifest.totalBytes, directory: captured.directory })
+          observations: captured.manifest.observations, bytes: captured.manifest.totalBytes, directory: captured.directory, failure: captured.failure })
       } catch (error) {
         report({ scenario: scenario.id, outcome: failureOutcome(error), failure: message(error, 'Unknown capture failure') })
       }

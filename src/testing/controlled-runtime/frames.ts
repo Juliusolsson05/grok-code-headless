@@ -6,12 +6,13 @@ export const MAX_LEADER_FRAME_BYTES = 64 * 1024 * 1024
  * Splits a native leader byte stream into its 4-byte big-endian length-framed
  * JSON envelopes.
  *
- * WHY one splitter shared by the recorder and the verifier: they used to carry
- * separate copies whose rules had already drifted (id matching, error handling),
- * so a recording could satisfy the harness's fail-fast check and then be refused
- * by the verifier after a whole native run. The independence that matters is
- * from the production framing in `src/control/`, whose defects these captures
- * exist to expose; this module deliberately never imports it.
+ * WHY one splitter shared by the recorder, the verifier and the fixture
+ * deriver: byte framing is the same fact for all of them, and separate copies
+ * had already drifted. Only framing is shared. Which answer belongs to which
+ * request still lives in each consumer: the harness keeps a deliberately smaller
+ * fail-fast subset of the verifier's pairing rules. The independence that
+ * matters is from the production framing in `src/control/`, whose defects these
+ * captures exist to expose; this module deliberately never imports it.
  *
  * WHY chunks are kept as a list: concatenating the whole buffer on every chunk
  * copies quadratically for large frames. Bytes are joined only once a complete

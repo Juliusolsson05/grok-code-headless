@@ -38,7 +38,9 @@ describe('leader frame splitter', () => {
   })
 
   it('reports an undecodable body without quoting its content, which may be a private prompt', () => {
-    const body = Buffer.from('{"prompt":"private prompt text"')
+    const body = Buffer.from('private prompt text')
+    // Non-vacuous: the engine's own parse error for this body quotes it.
+    expect(() => JSON.parse(body.toString())).toThrow(/private/)
     const header = Buffer.alloc(4); header.writeUInt32BE(body.length)
     const error = (() => { try { new FrameSplitter().push(Buffer.concat([header, body])) } catch (caught) { return caught as Error } })()
     expect(error?.message).toMatch(/not JSON/)
@@ -48,10 +50,12 @@ describe('leader frame splitter', () => {
   it('does not depend on the caller leaving a pushed chunk unchanged', () => {
     const splitter = new FrameSplitter()
     const reused = Buffer.from(wire)
-    const cut = frame(expected[0]).length + 2
-    expect(splitter.push(reused.subarray(0, cut))).toEqual(expected.slice(0, 1))
+    // Cut inside the first frame's body so retained bytes are nonzero JSON; a
+    // splitter that aliased the caller's buffer would decode zeroed bytes.
+    const cut = 4 + 5
+    expect(splitter.push(reused.subarray(0, cut))).toEqual([])
     const tail = Buffer.from(reused.subarray(cut))
     reused.fill(0)
-    expect(splitter.push(tail)).toEqual(expected.slice(1))
+    expect(splitter.push(tail)).toEqual(expected)
   })
 })

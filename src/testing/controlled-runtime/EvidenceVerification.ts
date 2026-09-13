@@ -1,6 +1,7 @@
-import { writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { readVerifiedCaptureBlob, verifyRuntimeCapture, type CaptureEvent } from './Capture.js'
+import { readVerifiedCaptureBlob, verifyRuntimeCapture, type CaptureEvent, type CaptureManifest } from './Capture.js'
 import { FrameSplitter } from './frames.js'
 
 type HistoryState = { bytes: Buffer; caughtUp: boolean }
@@ -10,7 +11,7 @@ type HistoryState = { bytes: Buffer; caughtUp: boolean }
  * rule change could alter what verifies: a verdict sealed under another value is
  * stale and must be recomputed, never trusted.
  */
-export const EVIDENCE_RULES_VERSION = 2
+export const EVIDENCE_RULES_VERSION = 3
 
 /**
  * One complete native leader frame reconstructed from recorded transport bytes.
@@ -38,6 +39,22 @@ type WireFrame = {
   envelope: unknown
 }
 
+/**
+ * A refused scenario CLAIM: the capture is complete and consistent, but it does
+ * not show what the scenario says native did. Only these are sealed as verdicts
+ * and reported as `evidence-rejected`, because they may be native variants the
+ * catalog must count.
+ *
+ * Everything else stays a plain Error: storage integrity, a manifest label that
+ * disagrees with its journal, and recorder-integrity failures (write receipts,
+ * framing, connection lifetimes, history continuity, missing final snapshots).
+ * Those describe the recording, not native behaviour, and a later intact read of
+ * the same capture must still be judgeable.
+ */
+export class EvidenceRejectedError extends Error {
+  constructor(reason: string) { super(reason); this.name = 'EvidenceRejectedError' }
+}
+
 /** This is deliberately stricter than RuntimeCapture's storage verifier. A
  * valid checksum proves that bytes were retained; this pass proves that the
  * retained observations form the continuations the Stage 1 contract needs.
@@ -45,8 +62,8 @@ type WireFrame = {
 export async function verifyScenarioEvidence(directory: string) {
   const { manifest, events } = await verifyRuntimeCapture(directory)
   if (!manifest.captureComplete || manifest.scenarioOutcome !== 'passed') throw new Error('Scenario did not produce complete passing storage evidence')
+  requireBoundScenario(manifest, events)
   requireEvent(events, 'lifecycle', 'capture-start')
-  requireEvent(events, 'scenario', 'started')
   requireEvent(events, 'scenario', 'passed')
   requireEvent(events, 'leader', 'spawned')
   requireEvent(events, 'leader', 'exited')
@@ -66,29 +83,25 @@ export async function verifyScenarioEvidence(directory: string) {
 export async function verifyLifecycleScenarioEvidence(directory: string) {
   const { manifest, events } = await verifyRuntimeCapture(directory)
   if (!manifest.captureComplete || manifest.scenarioOutcome !== 'passed') throw new Error('Lifecycle scenario did not produce complete passing storage evidence')
+  requireBoundScenario(manifest, events)
   requireEvent(events, 'lifecycle', 'capture-start')
-  requireEvent(events, 'scenario', 'started')
   requireEvent(events, 'scenario', 'passed')
   requireEvent(events, 'lifecycle', 'observation-window-drained')
   const spawned = events.filter(event => event.channel === 'leader' && event.kind === 'spawned' && (event.data as any)?.epoch === 'startup-failure')
   const exited = events.filter(event => event.channel === 'leader' && event.kind === 'exited' && (event.data as any)?.epoch === 'startup-failure')
   if (spawned.length !== 1 || exited.length !== 1 || (spawned[0].data as any).pid !== (exited[0].data as any).pid || spawned[0].sequence >= exited[0].sequence) {
-    throw new Error('Startup failure does not contain one matched owned process lifetime')
+    throw new EvidenceRejectedError('Startup failure does not contain one matched owned process lifetime')
   }
   const outcome = events.find(event => event.channel === 'verification' && event.kind === 'startup-failure-outcome')
   const data = outcome?.data as any
   if (data?.rejected !== true || data?.processAbsent !== true || data?.pid !== (spawned[0].data as any).pid) {
-    throw new Error('Startup failure did not verify the owned process is absent')
+    throw new EvidenceRejectedError('Startup failure did not verify the owned process is absent')
   }
   if (!Number.isInteger(data.nativeExitCode) || data.nativeExitCode === 0 || data.nativeSignal !== null ||
     data.nativeExitCode !== (exited[0].data as any).exitCode || data.nativeSignal !== (exited[0].data as any).signal) {
-    throw new Error('Startup failure lacks a matching nonzero native exit')
+    throw new EvidenceRejectedError('Startup failure lacks a matching nonzero native exit')
   }
   return { manifest, events }
-}
-
-export class EvidenceRejectedError extends Error {
-  constructor(reason: string) { super(reason); this.name = 'EvidenceRejectedError' }
 }
 
 /**
@@ -96,44 +109,72 @@ export class EvidenceRejectedError extends Error {
  *
  * WHY a separate verdict file: the storage manifest has to be written before
  * strict verification can read the sealed artifacts, so without this a capture
- * whose evidence is refused still reads passed/complete on disk. Stage 1 keeps
- * "the evidence does not show the scenario's claim" (a verdict, possibly a
- * native variant worth cataloguing) apart from "the capture is incomplete"
- * (refused storage).
+ * whose evidence is refused still reads passed/complete on disk.
  *
- * WHY the verdict names its rules and journal: rules tighten as reviews find
- * holes (this round refused five older restart captures), so a bare
- * `verified: true` would silently outlive the rules that produced it. The file
- * name and body carry EVIDENCE_RULES_VERSION and the body carries the journal
- * digest it judged. Readers must treat a missing verdict, another rules version
- * or another journal digest as NOT YET JUDGED and re-run the verifier. A crash
- * between sealing the manifest and writing this file leaves exactly that
- * missing-verdict state. Each rules version is written exclusively once.
+ * WHY only claim refusals are sealed: see EvidenceRejectedError. Storage that
+ * changes under the verifier's second read, or a recorder-integrity failure, is
+ * rethrown unsealed; sealing it would permanently catalogue a recording defect
+ * as native behaviour for this rules version and journal.
+ *
+ * WHY the verdict names its rules, journal and manifest: rules tighten as
+ * reviews find holes, and the manifest label selects which rules run, so a bare
+ * `verified: true` could outlive the rules or the label that produced it. Read
+ * verdicts only through readEvidenceVerdict, which treats any mismatch, or no
+ * verdict at all (for example a crash before it was written), as not yet judged.
+ * Each rules version is written exclusively once.
  */
 export async function sealEvidenceVerdict<T>(directory: string, verify: (directory: string) => Promise<T>): Promise<T> {
-  // Storage is not judged. An integrity failure, a lossy capture or a
-  // non-passing scenario throws a plain error and seals nothing, so storage
-  // corruption can never be catalogued as native behaviour. verify() repeats the
-  // storage pass; one more read of a capture capped at 128 MiB is the price.
   const { manifest } = await verifyRuntimeCapture(directory)
   if (!manifest.captureComplete || manifest.scenarioOutcome !== 'passed') throw new Error('Capture is not complete passing storage; its evidence was not judged')
-  let verified: T
-  try { verified = await verify(directory) } catch (error) {
-    const reason = error instanceof Error ? error.message : 'Unknown verification failure'
-    await writeVerdict(directory, manifest.journal.sha256, { verified: false, reason })
-    throw new EvidenceRejectedError(reason)
+  try {
+    const verified = await verify(directory)
+    await writeVerdict(directory, manifest, { verified: true })
+    return verified
+  } catch (error) {
+    if (error instanceof EvidenceRejectedError) await writeVerdict(directory, manifest, { verified: false, reason: error.message })
+    throw error
   }
-  await writeVerdict(directory, manifest.journal.sha256, { verified: true })
-  return verified
 }
 
 export function evidenceVerdictPath(directory: string): string {
   return join(directory, `evidence-verdict-r${EVIDENCE_RULES_VERSION}.json`)
 }
 
-async function writeVerdict(directory: string, journalSha256: string, verdict: { verified: boolean; reason?: string }) {
-  await writeFile(evidenceVerdictPath(directory),
-    JSON.stringify({ schemaVersion: 2, rules: EVIDENCE_RULES_VERSION, journalSha256, ...verdict }, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
+export type EvidenceVerdictStatus = { status: 'verified' } | { status: 'refused'; reason: string } | { status: 'unjudged'; why: string }
+
+/** The only supported way to read a sealed verdict. */
+export async function readEvidenceVerdict(directory: string): Promise<EvidenceVerdictStatus> {
+  let verdict: any
+  try { verdict = JSON.parse(await readFile(evidenceVerdictPath(directory), 'utf8')) } catch {
+    return { status: 'unjudged', why: `no verdict under evidence rules r${EVIDENCE_RULES_VERSION}` }
+  }
+  const manifestBytes = await readFile(join(directory, 'manifest.json'))
+  const manifest = JSON.parse(manifestBytes.toString('utf8')) as CaptureManifest
+  if (verdict?.rules !== EVIDENCE_RULES_VERSION || verdict?.journalSha256 !== manifest?.journal?.sha256 ||
+    verdict?.manifestSha256 !== createHash('sha256').update(manifestBytes).digest('hex')) {
+    return { status: 'unjudged', why: 'the verdict was sealed for other rules, another journal or another manifest' }
+  }
+  return verdict.verified === true ? { status: 'verified' } : { status: 'refused', reason: String(verdict.reason) }
+}
+
+async function writeVerdict(directory: string, manifest: CaptureManifest, verdict: { verified: boolean; reason?: string }) {
+  const manifestSha256 = createHash('sha256').update(await readFile(join(directory, 'manifest.json'))).digest('hex')
+  await writeFile(evidenceVerdictPath(directory), JSON.stringify({
+    schemaVersion: 2, rules: EVIDENCE_RULES_VERSION, journalSha256: manifest.journal.sha256, manifestSha256, ...verdict,
+  }, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
+}
+
+/**
+ * WHY bind the manifest label to the journal: the label chooses which claim
+ * rules run, but it lives in manifest.json, outside the journal digest. A renamed
+ * or edited label would otherwise silently skip the restart or cleanup rules
+ * while the journal still verifies.
+ */
+function requireBoundScenario(manifest: CaptureManifest, events: CaptureEvent[]) {
+  const started = events.filter(event => event.channel === 'scenario' && event.kind === 'started')
+  if (started.length !== 1 || (started[0].data as any)?.id !== manifest.metadata.scenario) {
+    throw new Error('Capture scenario label does not match its journaled scenario')
+  }
 }
 
 function requireEvent(events: CaptureEvent[], channel: string, kind: string) {
@@ -172,23 +213,24 @@ function rpcId(message: Record<string, any>): string | undefined {
  *
  * WHY the pairing aborts instead of guessing: accepting a later success would let
  * a refused request borrow the answer to an unrelated request that reused its
- * id. So pairing is refused when the id is still outstanding from an earlier
- * request, when a later request reuses it before an answer, and when an
- * unreadable `acp` frame sits between the request and the answer found (it could
- * have been the real answer). Ids are per connection, so nothing on another
- * connection can answer. Callers must only pass requests that carry an id.
+ * id. So pairing is refused while earlier same-direction requests with that id
+ * outnumber their answers (a count, because one answer settles only one of
+ * several outstanding requests), when a later request reuses the id before an
+ * answer, and when an unreadable `acp` frame sits between the request and the
+ * answer found (it could have been the real answer). Ids are per connection, so
+ * nothing on another connection can answer. Callers pass only requests with ids.
  */
 function answerTo(frames: readonly WireFrame[], request: WireFrame): { answer?: WireFrame; reused?: true; undecodable?: true } {
   const id = rpcId(acpMessage(request)!)
   const position = frames.indexOf(request)
-  let outstanding = false
+  let outstanding = 0
   for (const frame of frames.slice(0, position)) {
     const message = frame.connectionId === request.connectionId ? acpMessage(frame) : null
     if (!message || rpcId(message) !== id) continue
-    if (frame.direction === request.direction && message.method !== undefined) outstanding = true
-    else if (frame.direction !== request.direction && message.method === undefined) outstanding = false
+    if (frame.direction === request.direction && message.method !== undefined) outstanding++
+    else if (frame.direction !== request.direction && message.method === undefined) outstanding = Math.max(0, outstanding - 1)
   }
-  if (outstanding) return { reused: true }
+  if (outstanding > 0) return { reused: true }
   for (const frame of frames.slice(position + 1)) {
     if (frame.connectionId !== request.connectionId) continue
     const message = acpMessage(frame)
@@ -208,7 +250,7 @@ function verifyCleanupRetry(events: CaptureEvent[]) {
   if (attempts.length < 2 || !retained || (retained.data as any)?.rejected !== true || (retained.data as any)?.leaderAlive !== true ||
     !spawned || (retained.data as any)?.pid !== (spawned.data as any)?.pid || !exited || (exited.data as any)?.pid !== (spawned.data as any)?.pid ||
     retained.sequence >= attempts[1].sequence || exited.sequence <= attempts[1].sequence) {
-    throw new Error('Cleanup retry lacks retained-then-exited owned process evidence')
+    throw new EvidenceRejectedError('Cleanup retry lacks retained-then-exited owned process evidence')
   }
   // WHY the injection must be proven, not inferred from the rejection: native
   // cleanup failure is not something this scenario may claim to have observed.
@@ -222,11 +264,11 @@ function verifyCleanupRetry(events: CaptureEvent[]) {
   const injection = injections[0]
   if (injections.length !== 1 || (injection.data as any)?.injected !== true ||
     injection.sequence <= attempts[0].sequence || injection.sequence >= retained.sequence) {
-    throw new Error('Cleanup retry does not attribute its first failure to exactly one recorded controlled injection')
+    throw new EvidenceRejectedError('Cleanup retry does not attribute its first failure to exactly one recorded controlled injection')
   }
 }
 
-/** Every string inside an inference request body, so prompt text is matched as
+/** Every string inside an inference request item, so prompt text is matched as
  * decoded content rather than through JSON escaping. */
 function collectStrings(value: unknown, into: string[] = [], depth = 0): string[] {
   if (depth > 64) return into
@@ -250,32 +292,40 @@ function collectStrings(value: unknown, into: string[] = [], depth = 0): string[
  *     exiting before its second-epoch replacement started;
  *  2. before the first epoch ended, the first control connection's `session/new`
  *     was answered with the session the history observers followed, and a
- *     `session/prompt` for it was answered with a stopReason;
+ *     `session/prompt` for it carrying text was answered with a stopReason;
  *  3. a TUI connection opened in the resumed epoch received `session/load` for
  *     that session, native's first answer was a result whose write to the TUI
- *     completed, and no prompt for the session reached the resumed leader before
- *     that answer (the client registers with user-message echo, so a live
- *     prompt's echo would otherwise pass for replay);
+ *     completed, and no prompt for the session was live before that answer,
+ *     neither written by the owned control client nor sent by the resumed TUI:
+ *     both clients register with user-message echo, so a live prompt's echo
+ *     would otherwise pass for replay;
  *  4. before that answer, the same connection was sent a replayed
  *     `session/update user_message_chunk` for the session. A load answer alone
  *     is not enough: the first epoch's empty conversation is also answered, with
  *     nothing replayed;
  *  5. after the load completed, `session/prompt` for the session was written on a
- *     control connection (the first epoch's has closed by then, so it is the
- *     resumed leader's) and answered with a stopReason while the resumed leader
- *     was alive, with no guard hold of the resumed TUI in between;
- *  6. that prompt's inference request to the scripted backend carried the text
- *     of the prompt answered before the restart, so the model was given the
- *     prior conversation;
- *  7. the stable `chat_history.jsonl` checkpoint read after the load and before
- *     the resumed prompt starts with the bytes of the pre-restart checkpoint, and
- *     the checkpoint read after the prompt's answer is longer and starts with it.
- *     The two reads bracket the prompt (the window is wider than the prompt
- *     itself), so this shows native kept the prior conversation and grew around
- *     the prompt; it does not prove which request wrote the new bytes.
+ *     control connection opened in the resumed epoch and answered with a
+ *     stopReason while the resumed leader was alive, with no guard hold between
+ *     the resumed leader's spawn and that answer;
+ *  6. the resumed TURN's own inference request carried the pre-restart prompt:
+ *     a non-title request inside the prompt window whose input ends with the
+ *     resumed prompt and has an earlier, separate item with the pre-restart
+ *     prompt. WHY this shape: native also sends title and summary sidecars that
+ *     quote the conversation, and recorded summary sidecars continue past the
+ *     resumed prompt, while the recorded turn request ends with it. Requiring a
+ *     separate earlier item also refuses prompt texts that merely contain one
+ *     another. (A scenario that repeats an identical prompt would need its own
+ *     rule; this one assumes the two prompt texts differ.)
+ *  7. the stable pre-restart `chat_history.jsonl` checkpoint was read after that
+ *     prompt's answer and before the first epoch ended; the stable checkpoint
+ *     read after the load and before the resumed prompt starts with its bytes;
+ *     and the checkpoint read after the resumed answer is longer and starts with
+ *     that. The reads bracket the prompt (the window is wider than the prompt),
+ *     so this shows native kept the prior conversation and grew around the
+ *     prompt; it does not prove which request wrote the new bytes.
  */
 async function verifyRestartResume(directory: string, events: CaptureEvent[], frames: readonly WireFrame[], sessionId: string) {
-  const fail: (reason: string) => never = reason => { throw new Error(`Restart/resume evidence ${reason}`) }
+  const fail: (reason: string) => never = reason => { throw new EvidenceRejectedError(`Restart/resume evidence ${reason}`) }
   const select = (channel: string, kind: string) => events.filter(event => event.channel === channel && event.kind === kind)
   const field = (event: CaptureEvent, name: string) => (event.data as any)?.[name]
   const leaders = select('leader', 'spawned')
@@ -301,14 +351,24 @@ async function verifyRestartResume(directory: string, events: CaptureEvent[], fr
   }
   if (data.sessionId !== sessionId) fail('names a session other than the reconstructed native history')
 
-  const controlRequest = (method: string, from: number, to: number) => frames.find(frame => frame.role === 'control' &&
-    frame.direction === 'write-attempt' && frame.sequence > from && frame.sequence < to &&
-    (message => message?.method === method && message.id !== undefined &&
-      (method === 'session/new' || message.params?.sessionId === sessionId))(acpMessage(frame)))
+  const openedInResumedEpoch = (role: string) => new Set(select('ipc', 'opened')
+    .filter(event => field(event, 'role') === role && event.sequence > leaders[1].sequence)
+    .map(event => field(event, 'connectionId') as string))
+  const resumedControlConnections = openedInResumedEpoch('control')
+  const resumedTuiConnections = openedInResumedEpoch('tui')
+  const isPrompt = (frame: WireFrame) =>
+    (message => message?.method === 'session/prompt' && message.id !== undefined && message.params?.sessionId === sessionId)(acpMessage(frame))
+  const controlRequest = (method: string, from: number, to: number, connections?: ReadonlySet<string>) => frames.find(frame =>
+    frame.role === 'control' && frame.direction === 'write-attempt' && frame.sequence > from && frame.sequence < to &&
+    (!connections || connections.has(frame.connectionId)) &&
+    (method === 'session/prompt' ? isPrompt(frame) : (message => message?.method === method && message.id !== undefined)(acpMessage(frame))))
   const stopReasonOf = (answer: WireFrame | undefined) => {
     const reason = answer && acpMessage(answer)?.result?.stopReason
     return typeof reason === 'string' && reason ? reason : undefined
   }
+  const promptText = (request: WireFrame): string[] => (acpMessage(request)!.params?.prompt ?? [])
+    .filter((part: any) => part?.type === 'text' && typeof part.text === 'string' && part.text)
+    .map((part: any) => part.text as string)
 
   const created = controlRequest('session/new', 0, leaderExits[0].sequence)
   if (!created) fail('has no session/new written to the first owned leader')
@@ -323,17 +383,13 @@ async function verifyRestartResume(directory: string, events: CaptureEvent[], fr
   if (!earlierPrompt || !earlier?.answer || !stopReasonOf(earlier.answer) || earlier.answer.sequence >= leaderExits[0].sequence) {
     fail('has no prompt answered before the restart')
   }
-  const earlierText: string[] = (acpMessage(earlierPrompt)!.params?.prompt ?? [])
-    .filter((part: any) => part?.type === 'text' && typeof part.text === 'string' && part.text)
-    .map((part: any) => part.text as string)
+  const earlierAnswer = earlier.answer
+  const earlierText = promptText(earlierPrompt)
   if (!earlierText.length) fail('has no prompt text answered before the restart')
 
   // `session/load` and `session/update` carry `sessionId` directly in params on
   // the recorded 1.0.30 wire; nothing here unwraps other envelope shapes, which
   // could only widen what verifies.
-  const resumedTuiConnections = new Set(select('ipc', 'opened')
-    .filter(event => field(event, 'role') === 'tui' && event.sequence > leaders[1].sequence)
-    .map(event => field(event, 'connectionId') as string))
   const loadRequest = frames.find(frame => frame.direction === 'received' && resumedTuiConnections.has(frame.connectionId) &&
     (message => message?.method === 'session/load' && message.id !== undefined && message.params?.sessionId === sessionId)(acpMessage(frame)))
   if (!loadRequest) fail('has no resumed TUI session/load for the observed session')
@@ -345,7 +401,9 @@ async function verifyRestartResume(directory: string, events: CaptureEvent[], fr
   const loadMessage = acpMessage(loadAnswer)!
   if ('error' in loadMessage || !('result' in loadMessage)) fail('has a resumed session/load that native refused')
   if (loadAnswer.receipt !== 'write-complete') fail('has a session/load answer whose write to the TUI never completed')
-  if (controlRequest('session/prompt', leaders[1].sequence, loadAnswer.sequence)) fail('sends a session/prompt before the resumed load completed')
+  const livePrompt = frames.some(frame => frame.sequence > leaders[1].sequence && frame.sequence < loadAnswer.sequence && isPrompt(frame) &&
+    ((frame.role === 'control' && frame.direction === 'write-attempt') || (frame.direction === 'received' && resumedTuiConnections.has(frame.connectionId))))
+  if (livePrompt) fail('sends a session/prompt before the resumed load completed')
 
   // No receipt check on replay frames is needed: each precedes the delivered
   // load answer on the same connection, and any failed write there has already
@@ -356,7 +414,7 @@ async function verifyRestartResume(directory: string, events: CaptureEvent[], fr
       message.params?.update?.sessionUpdate === 'user_message_chunk')(acpMessage(frame)))
   if (!replayed) fail('has no replayed conversation delivered before the resumed session/load answer')
 
-  const promptRequest = controlRequest('session/prompt', loadAnswer.sequence, Infinity)
+  const promptRequest = controlRequest('session/prompt', loadAnswer.sequence, Infinity, resumedControlConnections)
   if (!promptRequest) fail('has no session/prompt written to the resumed leader after the load completed')
   const prompt = answerTo(frames, promptRequest)
   if (prompt.reused || prompt.undecodable) fail('cannot pair the resumed session/prompt with its answer')
@@ -370,22 +428,32 @@ async function verifyRestartResume(directory: string, events: CaptureEvent[], fr
   if (select('guard', 'holding').some(event => event.sequence > leaders[1].sequence && event.sequence < promptAnswer.sequence)) {
     fail('shows the guard holding the resumed TUI before the resumed prompt completed')
   }
+  const resumedText = promptText(promptRequest)
+  if (!resumedText.length) fail('has no resumed prompt text')
 
+  const carries = (item: unknown, parts: readonly string[]) => {
+    const strings = collectStrings(item)
+    return parts.every(part => strings.some(value => value.includes(part)))
+  }
   let carriedHistory = false
   for (const request of select('http', 'request')) {
     if (field(request, 'path') !== '/v1/responses' || !request.blob || request.sequence <= promptRequest.sequence || request.sequence >= promptAnswer.sequence) continue
     let body: unknown
     try { body = JSON.parse((await readVerifiedCaptureBlob(directory, request)).toString('utf8')) } catch { continue }
-    const strings = collectStrings(isRecord(body) ? body.input : undefined)
-    if (earlierText.every(text => strings.some(value => value.includes(text)))) { carriedHistory = true; break }
+    // The scripted backend's own evidenced title discriminator.
+    if (!isRecord(body) || (isRecord(body.tool_choice) && body.tool_choice.name === 'session_title')) continue
+    const input: unknown[] = Array.isArray(body.input) ? body.input : []
+    const resumedIndex = input.findIndex(item => carries(item, resumedText))
+    if (resumedIndex < 0 || resumedIndex !== input.length - 1) continue
+    if (input.slice(0, resumedIndex).some(item => carries(item, earlierText))) { carriedHistory = true; break }
   }
-  if (!carriedHistory) fail('has no resumed inference request carrying the prompt answered before the restart')
+  if (!carriedHistory) fail('has no resumed turn inference request carrying the prompt answered before the restart')
 
   const checkpoint = (label: string) => events.find(event => event.channel === 'file' && event.kind === 'snapshot' &&
     field(event, 'sessionId') === sessionId && field(event, 'file') === 'chat_history.jsonl' && field(event, 'label') === label)
   const preRestart = checkpoint('before-tui-restart')
-  if (!preRestart?.blob || field(preRestart, 'stable') !== true || preRestart.sequence >= leaderExits[0].sequence) {
-    fail('has no stable chat history checkpoint before the restart')
+  if (!preRestart?.blob || field(preRestart, 'stable') !== true || preRestart.sequence <= earlierAnswer.sequence || preRestart.sequence >= leaderExits[0].sequence) {
+    fail('has no stable chat history checkpoint between the pre-restart answer and the restart')
   }
   const before = checkpoint('before-resumed-prompt')
   if (!before?.blob || field(before, 'stable') !== true || before.sequence <= loadAnswer.sequence || before.sequence >= promptRequest.sequence) {
@@ -410,30 +478,43 @@ async function verifyTransport(directory: string, events: CaptureEvent[]): Promi
   const pending = new Map<string, number>()
   const awaitingReceipt = new Map<string, WireFrame[]>()
   const failedWrites = new Map<string, number[]>()
-  const queuedBeforeOpen = new Set<string>()
+  // Connection -> role of its single pre-open registration write (see below).
+  const queuedBeforeOpen = new Map<string, string>()
   const streams = new Map<string, { splitter: FrameSplitter; frames: number }>()
   const frames: WireFrame[] = []
+  const outsideLifetime = (connection: string) => new Error(`Transport data outside its connection lifetime: ${connection}`)
   for (const event of events.filter(event => event.channel === 'ipc')) {
     const data = event.data as any
     if (typeof data?.connectionId !== 'string' || typeof data?.role !== 'string') throw new Error('Invalid transport identity')
     const connection = data.connectionId
-    if (event.kind === 'opened') { opened.set(connection, { role: data.role, closed: false }); roles.add(data.role) }
+    // Every socket observer assigns one role per connection id for its whole
+    // life; a changed label would let a frame from one leg stand in for another.
+    const knownRole = opened.get(connection)?.role ?? queuedBeforeOpen.get(connection)
+    if (knownRole !== undefined && knownRole !== data.role) throw new Error(`Transport event role does not match its connection: ${connection}`)
+    if (event.kind === 'opened') {
+      if (opened.has(connection)) throw new Error(`Transport connection opened twice: ${connection}`)
+      opened.set(connection, { role: data.role, closed: false }); roles.add(data.role)
+    }
     if (event.kind === 'closed' && opened.has(connection)) opened.get(connection)!.closed = true
+    let queuedRegistration = false
     if (event.kind === 'received' || event.kind === 'write-attempt') {
-      // No data after `closed`, and nothing received before `opened`. Neither is
-      // produced by the socket observers, and accepting either would let a frame
-      // attributed to a closed connection stand in for live traffic (the restart
-      // rules rely on the first epoch's control connection being gone once it
-      // has closed). A write attempt before `opened` IS real: the guard writes
-      // the TUI's registration to its upstream socket as soon as it creates it,
-      // Node queues the write until `connect`, and `opened` is observed on
-      // `connect`. Every recorded 1.0.30 capture shows exactly that, and nothing
-      // else, outside a lifetime. Such a connection must still open, which is
-      // checked once the stream ends. Write receipts are exempt throughout: a
-      // write callback may legitimately trail the close.
+      // No data after `closed`, and nothing received before `opened`: the socket
+      // observers produce neither, and accepting either would let a frame
+      // attributed to a closed connection stand in for live traffic. One write
+      // before `opened` IS real: the guard writes the TUI's registration to its
+      // upstream socket as soon as it creates it, Node queues that write until
+      // `connect`, and `opened` is observed on `connect`. The guard can send
+      // nothing else before it connects, and every recorded capture shows
+      // exactly one registration there, so that is all this allows; the
+      // connection must still open, which is checked once the stream ends.
+      // Write receipts are exempt throughout: a callback may trail the close.
       const lifecycle = opened.get(connection)
-      if (lifecycle?.closed || (!lifecycle && event.kind === 'received')) throw new Error(`Transport data outside its connection lifetime: ${connection}`)
-      if (!lifecycle) queuedBeforeOpen.add(connection)
+      if (lifecycle?.closed) throw outsideLifetime(connection)
+      if (!lifecycle) {
+        if (event.kind !== 'write-attempt' || data.role !== 'guard-upstream' || queuedBeforeOpen.has(connection)) throw outsideLifetime(connection)
+        queuedBeforeOpen.set(connection, data.role)
+        queuedRegistration = true
+      }
     }
     if (event.kind === 'write-attempt') {
       if (!Number.isInteger(data.writeId) || !event.blob) throw new Error('Invalid transport write attempt')
@@ -458,6 +539,7 @@ async function verifyTransport(directory: string, events: CaptureEvent[]): Promi
       let envelopes: unknown[]
       try { envelopes = stream.splitter.push(bytes) }
       catch (error) { throw new Error(`Invalid transport frame on ${key}: ${error instanceof Error ? error.message : 'undecodable'}`) }
+      if (queuedRegistration && (envelopes.length !== 1 || !isRecord(envelopes[0]) || envelopes[0].type !== 'register')) throw outsideLifetime(connection)
       for (const envelope of envelopes) {
         const frame: WireFrame = { connectionId: connection, role: data.role, direction: event.kind, sequence: event.sequence, index: stream.frames++, envelope }
         frames.push(frame)
@@ -480,9 +562,7 @@ async function verifyTransport(directory: string, events: CaptureEvent[]): Promi
     // authoritative lifetime boundary.
     if (!lifecycle.closed) throw new Error(`Opened transport ${connection} did not close definitively`)
   }
-  for (const connection of queuedBeforeOpen) {
-    if (!opened.has(connection)) throw new Error(`Transport data outside its connection lifetime: ${connection}`)
-  }
+  for (const connection of queuedBeforeOpen.keys()) if (!opened.has(connection)) throw outsideLifetime(connection)
   if (!streams.size) throw new Error('No framed transport bytes recorded')
   for (const [key, stream] of streams) {
     if (stream.splitter.pendingBytes) throw new Error(`Incomplete transport frame: ${key}`)

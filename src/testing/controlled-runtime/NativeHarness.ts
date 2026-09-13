@@ -139,14 +139,24 @@ export class NativeHarness {
       // Requiring the installed process's unsignaled nonzero exit proves the
       // malformed disposable config, rather than the deadline, caused failure.
       if (!rejected || !processAbsent || !Number.isInteger(nativeExitCode) || nativeExitCode === 0 || nativeSignal !== null) {
-        throw new Error('Installed native did not produce a cleaned native startup failure')
+        // Native behaving differently is a scenario outcome, exactly like an
+        // ordinary scenario whose run() throws: seal a complete failed capture
+        // and report it as failed, so the variant is counted instead of being
+        // hidden as an incomplete capture.
+        const failure = 'Installed native did not produce a cleaned native startup failure'
+        capture.record('scenario', 'failed', { id: scenario.id, failure })
+        capture.record('lifecycle', 'observation-window-drained')
+        sealed = true
+        const manifest = capture.finish('failed')
+        const { events } = await verifyRuntimeCapture(capture.directory)
+        return { manifest, events, directory: capture.directory, failure: failure as string | undefined }
       }
       capture.record('scenario', 'passed', { id: scenario.id })
       capture.record('lifecycle', 'observation-window-drained')
       sealed = true
       const manifest = capture.finish('passed')
       const verified = await sealEvidenceVerdict(capture.directory, verifyLifecycleScenarioEvidence)
-      return { manifest, events: verified.events, directory: capture.directory }
+      return { manifest, events: verified.events, directory: capture.directory, failure: undefined as string | undefined }
     } catch (error) {
       // A sealed refusal is a verdict about complete evidence, not a failed
       // capture; the runner reports the two outcomes separately.
@@ -381,9 +391,10 @@ export class NativeHarness {
     // A checksum-valid journal is necessary but not sufficient. Passing native
     // scenarios are reported only after transport receipts, framed streams and
     // reconstructed history agree with their stable final native snapshots.
-    // sealEvidenceVerdict refuses to judge lossy or corrupt storage (a plain
-    // error the runner reports as capture-incomplete) and seals the judgement of
-    // complete storage beside it, so refused evidence never reads as passing.
+    // sealEvidenceVerdict refuses to judge lossy or corrupt storage and leaves
+    // recorder-integrity failures unsealed (plain errors the runner reports as
+    // capture-incomplete); it seals only scenario-claim judgements, so a reader
+    // using readEvidenceVerdict never sees refused evidence as passing.
     const verified = outcome === 'passed'
       ? await sealEvidenceVerdict(this.capture.directory, verifyScenarioEvidence)
       : await verifyRuntimeCapture(this.capture.directory)

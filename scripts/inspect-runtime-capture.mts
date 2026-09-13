@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { verifyRuntimeCapture } from '../src/testing/controlled-runtime/Capture.js'
+import { readEvidenceVerdict } from '../src/testing/controlled-runtime/EvidenceVerification.js'
 
 const directory = process.argv[2]
 if (!directory) throw new Error('Usage: inspect-runtime-capture.mts PRIVATE_CAPTURE_DIRECTORY')
@@ -38,7 +39,11 @@ for (const event of verified.events) {
     }
   }
 }
+// `outcome` is the storage manifest's scenario outcome. Whether the evidence
+// supports the scenario's claim is the sealed verdict, read through its contract:
+// a missing or mismatched verdict is reported as unjudged, never as passing.
 console.log(JSON.stringify({ scenario: verified.manifest.metadata.scenario, outcome: verified.manifest.scenarioOutcome,
+  evidence: await readEvidenceVerdict(resolve(directory)),
   captureComplete: verified.manifest.captureComplete, observations: verified.events.length, bytes: verified.manifest.totalBytes,
   channels: verified.manifest.channelCounts, rowTypes, updates, methods, invokedTools: [...tools],
   advertisedTools: process.argv.includes('--schemas') ? Object.fromEntries(advertisedTools) : [...advertisedTools.keys()],

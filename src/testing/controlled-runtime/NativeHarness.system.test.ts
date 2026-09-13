@@ -102,9 +102,10 @@ describe('NativeHarness restart', () => {
 
 describe('NativeHarness TUI wire observation', () => {
   // These feed real length-framed ACP packets through the harness's transport
-  // observer instead of stubbing its conclusions. The pairing rules must match
-  // EvidenceVerification's; if they drift, a native run passes the harness's
-  // fail-fast check and is refused only after the whole recording was spent.
+  // observer instead of stubbing its conclusions. The harness applies a
+  // deliberately smaller subset of EvidenceVerification's pairing rules; these
+  // pin that subset, so it can only let through captures the verifier may still
+  // refuse, never accept a load or replay the verifier would pair differently.
   const SESSION = '00000000-0000-4000-8000-000000000001'
   const acp = (message: unknown) => {
     const body = Buffer.from(JSON.stringify({ type: 'acp', payload: JSON.stringify(message) }))
