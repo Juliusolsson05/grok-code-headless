@@ -1,0 +1,7 @@
+{"sequence":1,"channel":"lifecycle","kind":"capture-start","data":{"nativeVersion":"grok 1.0.30 (04b7ffed98c6)","nodeVersion":"v24.14.1"},"omitted":"host-paths"}
+{"sequence":2,"channel":"scenario","kind":"started","data":{"id":"id-1"}}
+{"sequence":3,"channel":"leader","kind":"spawned","data":{"kind":"spawned","pid":1,"epoch":"[text 1]"}}
+{"sequence":4,"channel":"leader","kind":"exited","data":{"kind":"exited","pid":1,"exitCode":1,"signal":null,"epoch":"[text 1]"}}
+{"sequence":5,"channel":"verification","kind":"startup-failure-outcome","data":{"rejected":true,"pid":1,"processAbsent":true,"nativeExitCode":1,"nativeSignal":null}}
+{"sequence":6,"channel":"scenario","kind":"passed","data":{"id":"id-1"}}
+{"sequence":7,"channel":"lifecycle","kind":"observation-window-drained","data":{}}
