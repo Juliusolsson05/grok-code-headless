@@ -59,14 +59,21 @@ const LOOKS_PRIVATE = [
   /@/, // e-mail addresses and user@host
 ]
 
+// WHY every check below builds its `expect` only when the check has already
+// failed: this walk visits every key and value of all 52 timelines, tens of
+// thousands of them per file. Creating an assertion per value cost 0.4–1.6 s per
+// timeline and pushed tests past the 5 s timeout whenever the host was loaded
+// (review round 2 saw two such failures at load average ~100). The checks and
+// their failure messages are unchanged; a passing value simply no longer pays
+// for an assertion object.
 function assertPublishable(value: unknown, key = '', depth = 0): void {
-  expect(depth, 'fixture nesting').toBeLessThan(80)
+  if (!(depth < 80)) expect(depth, 'fixture nesting').toBeLessThan(80)
   if (value === null || typeof value === 'boolean') return
   if (typeof value === 'number') {
     const allowed = Number.isSafeInteger(value)
       ? Math.abs(value) <= 10_000 || (LARGE_NUMBER_KEYS.has(key) && Math.abs(value) <= 1_000_000)
       : Math.abs(value) === 1.5
-    expect(allowed, `unreviewed fixture number at ${key}`).toBe(true)
+    if (!allowed) expect(allowed, `unreviewed fixture number at ${key}`).toBe(true)
     return
   }
   if (Array.isArray(value)) { for (const item of value) assertPublishable(item, key, depth + 1); return }
@@ -74,12 +81,12 @@ function assertPublishable(value: unknown, key = '', depth = 0): void {
     for (const [field, item] of Object.entries(value)) {
       const shaped = /^[A-Za-z_][A-Za-z0-9_.\-/]{0,63}$/.test(field) && (field === 'token' || !CREDENTIAL_KEY.test(field)) &&
         !LOOKS_PRIVATE.some(pattern => pattern.test(field))
-      expect(shaped, `unreviewed fixture key ${field}`).toBe(true)
+      if (!shaped) expect(shaped, `unreviewed fixture key ${field}`).toBe(true)
       assertPublishable(item, field, depth + 1)
     }
     return
   }
-  expect(typeof value).toBe('string')
+  if (typeof value !== 'string') expect(typeof value).toBe('string')
   const text = value as string
   if (text === '' || PLACEHOLDER.test(text) || NATIVE_PHRASES.has(text) || /^grok \d+\.\d+\.\d+ \([0-9a-f]{12}\)$/.test(text)) return
   if (key === 'path' && FIXTURE_BACKEND_PATHS.has(text)) return
@@ -94,7 +101,8 @@ function assertPublishable(value: unknown, key = '', depth = 0): void {
   if (stripped === '') return
   const slashShape = Object.hasOwn(SLASHED_VALUE_SHAPES, key) ? SLASHED_VALUE_SHAPES[key] : undefined
   const slashAllowed = !text.includes('/') || Boolean(slashShape?.test(text))
-  expect(TOKEN.test(text) && slashAllowed && !LOOKS_PRIVATE.some(pattern => pattern.test(text)), `unreviewed fixture string at ${key}`).toBe(true)
+  const publishable = TOKEN.test(text) && slashAllowed && !LOOKS_PRIVATE.some(pattern => pattern.test(text))
+  if (!publishable) expect(publishable, `unreviewed fixture string at ${key}`).toBe(true)
 }
 
 const PROSE_PRIVATE = [/[0-9a-f]{8}-[0-9a-f]{4}-/i, /\d{4}-\d{2}-\d{2}/, /:\/\//, /(?:^|\s)\/(?:Users|private|var|tmp|home)\//, /[0-9a-f]{16,}/i, /\b\d{1,3}(?:\.\d{1,3}){3}\b/]

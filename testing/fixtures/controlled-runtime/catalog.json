@@ -1,0 +1,899 @@
+{
+  "schemaVersion": 1,
+  "corpus": "corpus/manifest.json",
+  "evidenceRules": 3,
+  "nativeVersion": "1.0.30",
+  "policy": "Every fact names the one source that owns it and cites the recorded observations it rests on: a corpus scenario and event sequence, with structured `follows` and `precedes` references where the fact claims an ordering, and field-keyed `mentions` where it claims an identity (a prompt id, a JSON-RPC id). It lists recorded variants and contradicting observations with how the contract resolves them, and states the expected outcome the Stage 3 root class must produce. Sample counts are the manifest's per-version capture counts for every cited scenario. The published timelines are from Grok 1.0.30; some scenarios also have verified 1.0.25 captures, counted in `samples`. catalog.system.test.ts re-derives every citation, ordering and identity. Every derived native signal observed in the corpus must be owned by exactly one fact, or named as harness instrumentation, and cited at least once. The derived signals (corpusSignals.ts) are: discriminators; observer channels; queue state and notification methods, with other sessions kept apart; tool status, mode and MCP status; stop reasons, replay, activity, reply outcomes, cancellation categories and guard reasons; the same values read from durable updates.jsonl and events.jsonl rows, under `durable-` names; control failures; prompt-id origin; and the traffic on the terminal and control connections, including every update kind native writes toward the terminal and terminal answers the guard forwards upstream. A new native value of one of those fails the gate and reopens the catalog. Content the deriver replaces with placeholders, keys it does not derive, and values inside frames written toward the terminal cannot.",
+  "decisions": [
+    {
+      "id": "stop-scope",
+      "question": "What does the app's Stop action do while prompts are queued behind the running turn?",
+      "options": {"running-turn-only": "Send session/cancel, which native applies to the running turn only; queued prompts stay queued and run.", "clear-queue": "Also retire every queued prompt, which native does not do on its own and would need an additional mechanism."},
+      "decision": "running-turn-only",
+      "basis": "Recommended default matching recorded native session/cancel semantics. The user was asked (1A recommended) and then asked for all remaining work to continue without choosing; this default stands until the user overrides it. Plan note: the plan asked for these decisions before the catalog was written; that ordering was waived when the user asked for all remaining work to continue, and the defaults are recorded here instead.",
+      "recordedAt": "2026-09-13",
+      "status": "recommended-default"
+    },
+    {
+      "id": "stop-foreign-turn",
+      "question": "What does the app's Stop action do when the running turn was typed in the native terminal rather than sent from Agent Code?",
+      "options": {"cancel-running-turn": "Send session/cancel anyway. Native cancels whichever turn is running, including one the user typed in the terminal (prompt.cancel).", "refuse-foreign-turn": "Offer Stop only while an app prompt is running, and leave a terminal-typed turn to the terminal."},
+      "decision": "cancel-running-turn",
+      "basis": "Recommended default, NOT user-confirmed. It matches native semantics and what Stop already means for the other providers: stop the session's current work. Found by review after the user asked for all remaining work to continue, so it was never put to them; it must be confirmed before Stage 4 wires Stop.",
+      "recordedAt": "2026-09-13",
+      "status": "recommended-default-unconfirmed"
+    },
+    {
+      "id": "terminal-prompts",
+      "question": "How are prompts typed directly into Grok's native terminal shown in Agent Code?",
+      "options": {"normal-user-messages": "Rendered exactly like prompts sent from Agent Code.", "marked-terminal-origin": "Rendered with a visible 'typed in terminal' marker."},
+      "decision": "normal-user-messages",
+      "basis": "Recommended default. Native gives terminal prompts the same shape as control prompts, so only the absence of an app-issued prompt id distinguishes them; the root class still keeps that distinction internally so acceptance of app prompts is never confused. The user was asked (2A recommended) and then asked for all remaining work to continue without choosing; this default stands until the user overrides it. Plan note: the plan asked for these decisions before the catalog was written; that ordering was waived when the user asked for all remaining work to continue, and the defaults are recorded here instead.",
+      "recordedAt": "2026-09-13",
+      "status": "recommended-default"
+    },
+    {
+      "id": "terminal-conversation-change",
+      "question": "What happens when the native terminal moves to another conversation?",
+      "options": {"fence": "Fence terminal input and require an explicit app session action.", "follow": "Silently follow the terminal to the new conversation."},
+      "decision": "fence",
+      "basis": "Approved ownership rule in agent-code docs/decomposition/grok-controlled-runtime.md (conversation identity). Detection belongs to the package (session.terminal-connection). The fence itself is new behaviour: OpenCode Terminal only detects and never gates input. The app session owns it and stops forwarding terminal input once a change is detected.",
+      "recordedAt": "2026-09-12",
+      "status": "approved"
+    },
+    {
+      "id": "uncertain-prompts",
+      "question": "What happens to a prompt whose delivery or completion is uncertain after a transport or process loss?",
+      "options": {"expose-uncertain": "Report it as uncertain and never replay it automatically.", "replay": "Resend it after recovery."},
+      "decision": "expose-uncertain",
+      "basis": "Approved observable end state in agent-code docs/decomposition/grok-controlled-runtime.md (no uncertain prompt is automatically replayed).",
+      "recordedAt": "2026-09-12",
+      "status": "approved"
+    }
+  ],
+  "facts": [
+    {
+      "id": "session.identity",
+      "question": "Which conversation does an Agent Code Grok session own?",
+      "owner": "control",
+      "ownerDetail": "The UUID the app requests in control session/new _meta.sessionId, adopted by native and answered by the session/new result.",
+      "expectedOutcome": "The app assigns the session id before any native process can guess one. GrokHeadless is constructed for that id and never re-derives it from files, screen text or native announcements. A session/new result for a different id is a startup failure.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 42, "signal": "method:session/new", "shows": "Control requests a session with an app-chosen _meta.sessionId."},
+        {"scenario": "text-load-repeat", "sequence": 60, "signal": "action:rpc-result", "shows": "Native answers session/new before the terminal is started."},
+        {"scenario": "second-session-control", "sequence": 301, "signal": "method:session/new", "shows": "A second app-chosen id on the same leader."},
+        {"scenario": "second-session-control", "sequence": 414, "signal": "verification:second-session-outcome", "shows": "Native kept the second requested id and completed a prompt in it (the scenario refuses any other id)."}
+      ],
+      "variants": [
+        {"scenario": "text-load-repeat", "sequence": 43, "signal": "control-sends:session/new", "shows": "The session/new request frame the control client wrote."},
+        {"scenario": "second-session-control", "sequence": 327, "signal": "other-session:queue:running", "shows": "Another app session's queue arrives on the same connection and must not drive this session."},
+        {"scenario": "native-subagent", "sequence": 409, "signal": "other-session:queue:waiting", "shows": "A child session's queue on the same connection."},
+        {"scenario": "native-subagent", "sequence": 565, "signal": "other-session:queue:idle", "shows": "The child session's queue empties."},
+        {"scenario": "second-session-control", "sequence": 310, "signal": "other-session:method:_x.ai/mcp/init_progress", "shows": "Another session's MCP progress on the same connection."},
+        {"scenario": "second-session-control", "sequence": 362, "signal": "other-session:method:_x.ai/mcp/server_status", "shows": "Another session's MCP server status."},
+        {"scenario": "second-session-control", "sequence": 399, "signal": "other-session:method:_x.ai/mcp_initialized", "shows": "Another session's MCP initialization."},
+        {"scenario": "native-subagent", "sequence": 409, "signal": "other-session:method:_x.ai/queue/changed", "shows": "A child session's queue notification."},
+        {"scenario": "native-subagent", "sequence": 419, "signal": "other-session:method:session/update", "shows": "A child session's updates."},
+        {"scenario": "native-subagent", "sequence": 564, "signal": "other-session:method:_x.ai/session_notification", "shows": "A child session's extension notifications."},
+        {"scenario": "second-session-control", "sequence": 411, "signal": "other-session:method:_x.ai/session/prompt_complete", "shows": "Another session's prompt completion."}
+      ],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["method:session/new", "verification:second-session-outcome", "control-sends:session/new", "other-session:queue:waiting", "other-session:queue:running", "other-session:queue:idle", "other-session:method:_x.ai/mcp_initialized", "other-session:method:_x.ai/mcp/init_progress", "other-session:method:_x.ai/mcp/server_status", "other-session:method:_x.ai/queue/changed", "other-session:method:_x.ai/session_notification", "other-session:method:_x.ai/session/prompt_complete", "other-session:method:session/update"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "second-session-control": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "native-subagent": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "session.activity",
+      "question": "Is the session working or idle?",
+      "owner": "control",
+      "ownerDetail": "_x.ai/queue/changed (running and waiting prompts) together with per-prompt completion; _x.ai/sessions/changed activity is advisory only.",
+      "expectedOutcome": "GrokHeadless reports working while any prompt is running or waiting and idle only when the queue is empty and every running prompt has completed. sessions/changed activity never overrides the queue.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 295, "signal": "activity:working", "shows": "sessions/changed announces working when a prompt starts."},
+        {"scenario": "text-load-repeat", "sequence": 486, "signal": "activity:idle", "shows": "sessions/changed announces idle after the prompt completes."},
+        {"scenario": "text-load-repeat", "sequence": 295, "signal": "method:_x.ai/sessions/changed", "shows": "The advisory announcement method."}
+      ],
+      "variants": [
+        {"scenario": "concurrent-prompts", "sequence": 302, "signal": "activity:working", "shows": "working is announced again while the session is already working."}
+      ],
+      "contradictions": [
+        {"scenario": "concurrent-prompts", "sequence": 511, "signal": "activity:idle", "shows": "idle is announced for the first prompt while the queued second prompt is already running.", "resolution": "Activity is derived from the queue and prompt completions; a sessions/changed idle while a prompt is running is ignored.", "follows": [{"sequence": 509, "signal": "queue:running", "mentions": [{"field": "runningPromptId", "value": "prompt-2"}]}]},
+        {"scenario": "cancel-queued-prompt", "sequence": 357, "signal": "activity:idle", "shows": "idle announced while the queued prompt runs.", "follows": [{"sequence": 342, "signal": "queue:running", "mentions": [{"field": "runningPromptId", "value": "prompt-2"}]}], "resolution": "Same as the concurrent-prompts contradiction: activity comes from the queue and completions; no working announcement follows for the running prompt."},
+        {"scenario": "concurrent-acp-then-tui", "sequence": 360, "signal": "activity:idle", "shows": "idle announced while the queued terminal prompt runs.", "follows": [{"sequence": 358, "signal": "queue:running"}], "resolution": "sessions/changed idle is ignored while a prompt is open."},
+        {"scenario": "concurrent-tui-then-acp", "sequence": 347, "signal": "activity:idle", "shows": "idle announced while the queued app prompt runs.", "follows": [{"sequence": 345, "signal": "queue:running"}], "resolution": "sessions/changed idle is ignored while a prompt is open."},
+        {"scenario": "cancel-inference", "sequence": 285, "signal": "queue:running", "shows": "The last queue notification before the cancelled completion still names prompt-1 running; no queue update follows it.", "mentions": [{"field": "runningPromptId", "value": "prompt-1"}], "resolution": "Queue state can stay stale after a cancel. Completion ends the turn and activity, never the queue alone."}
+      ],
+      "gaps": [],
+      "signals": ["method:_x.ai/sessions/changed", "activity:working", "activity:idle"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "concurrent-prompts": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "cancel-queued-prompt": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "concurrent-acp-then-tui": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "concurrent-tui-then-acp": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "cancel-inference": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "session.load-replay",
+      "question": "What does loading an existing conversation deliver, and how is replay told apart from live output?",
+      "owner": "control",
+      "ownerDetail": "Replayed updates are delivered before the session/load answer and carry params._meta.isReplay; the load result ends replay.",
+      "expectedOutcome": "Replayed updates never produce prompt acceptance, running or completion events and never re-open a turn. GrokHeadless treats them as a transcript snapshot bounded by the load answer; durable history remains the transcript owner (history.durable).",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 535, "signal": "method:session/load", "shows": "Control loads the existing conversation."},
+        {"scenario": "text-load-repeat", "sequence": 540, "signal": "replay", "shows": "The replayed user message carries _meta.isReplay."},
+        {"scenario": "text-load-repeat", "sequence": 543, "signal": "method:_x.ai/session/update", "shows": "Replay closes each turn with an extension turn_completed marker."},
+        {"scenario": "text-load-repeat", "sequence": 548, "signal": "action:rpc-result", "shows": "The load answer arrives after the replay.", "follows": [{"sequence": 540, "signal": "replay"}]}
+      ],
+      "variants": [
+        {"scenario": "image-content-1", "sequence": 550, "signal": "replay", "shows": "Replay of a turn with image content."},
+        {"scenario": "manual-compaction", "sequence": 1238, "signal": "sessionUpdate:compaction_checkpoint", "shows": "Replay after compaction includes the compaction checkpoint."},
+        {"scenario": "rewind-history-replacement", "sequence": 1032, "signal": "replay", "shows": "Replay after a rewind covers only the surviving turn."},
+        {"scenario": "text-load-repeat", "sequence": 536, "signal": "control-sends:session/load", "shows": "The session/load request frame the control client wrote."},
+        {"scenario": "native-restart-resume", "sequence": 632, "signal": "tui-receives-update:user_message_chunk", "shows": "After resume the replayed user message is written to the terminal; control sees its first user message only with the new prompt.", "precedes": [{"sequence": 792, "signal": "sessionUpdate:user_message_chunk"}]}
+      ],
+      "contradictions": [
+        {"scenario": "native-restart-resume", "sequence": 630, "signal": "sessionUpdate:user_message_chunk", "shows": "In the resumed epoch the replay goes only to the terminal, which is the client that loaded.", "resolution": "Replay is delivered to the client that loads. When only the terminal loads, the transcript comes from durable history (history.durable); the package never expects control replay after resume."}
+      ],
+      "gaps": [],
+      "signals": ["method:session/load", "replay", "method:_x.ai/session/update", "control-sends:session/load"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "image-content-1": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "manual-compaction": {"1.0.30": {"verified": 1, "refused": 0, "failed": 1}}, "rewind-history-replacement": {"1.0.30": {"verified": 1, "refused": 0, "failed": 2}}, "native-restart-resume": {"1.0.30": {"verified": 1, "refused": 5, "failed": 0}}}
+    },
+    {
+      "id": "session.load-failure",
+      "question": "What happens when a conversation cannot be loaded?",
+      "owner": "control",
+      "ownerDetail": "A JSON-RPC error answer to session/load.",
+      "expectedOutcome": "A received error answer is a definite refusal: GrokHeadless reports resume failure and creates no session state. The control client's uncertain flag on a received remote error does not make the load 'maybe applied'.",
+      "evidence": [
+        {"scenario": "load-unavailable-session", "sequence": 281, "signal": "method:session/load", "shows": "Load of a valid but absent id."},
+        {"scenario": "load-unavailable-session", "sequence": 285, "signal": "rpc-error:remote", "shows": "Native answers with an error (-32603)."},
+        {"scenario": "load-unavailable-session", "sequence": 286, "signal": "verification:unavailable-load-outcome", "shows": "The load was rejected."}
+      ],
+      "variants": [],
+      "contradictions": [
+        {"scenario": "load-unavailable-session", "sequence": 285, "signal": "action:rpc-error", "shows": "The control client labels the received error uncertain.", "resolution": "Stage 3 classifies a received JSON-RPC error answer as definite; uncertainty is reserved for writes without an answer (control.rpc-failure)."}
+      ],
+      "gaps": ["Whether native ever answers a load of an unreadable stored conversation successfully has not been recorded."],
+      "signals": ["verification:unavailable-load-outcome"],
+      "samples": {"load-unavailable-session": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "session.terminal-connection",
+      "question": "What does the native terminal ask for on its own connection, and when has it moved to another conversation?",
+      "owner": "terminal-connection",
+      "ownerDetail": "Requests the TUI itself sends through the guard. Attach sends initialize, authenticate, session/load of the assigned id and informational requests; session/new (or a load of another id) is a conversation change.",
+      "expectedOutcome": "GrokHeadless observes the terminal's own requests. Attach requests for the assigned id are expected. A terminal session/new (once native answers it), or a terminal load or prompt naming another session id, is reported as `session-switched`. That is detection only, as in OpenCode Terminal. The fence is new behaviour that no sibling has, and the app session owns it (decision terminal-conversation-change): it stops forwarding terminal input and requires an explicit session action. Native streams the whole session to the terminal too, so updates written toward the terminal, and screen text, never decide which conversation the terminal is on.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 119, "signal": "tui-sends:initialize", "shows": "The terminal initializes its own ACP connection."},
+        {"scenario": "text-load-repeat", "sequence": 140, "signal": "tui-sends:authenticate", "shows": "The terminal authenticates."},
+        {"scenario": "text-load-repeat", "sequence": 155, "signal": "tui-sends:session/load", "shows": "The terminal loads the assigned session on attach."},
+        {"scenario": "tui-new-session", "sequence": 520, "signal": "tui-sends:session/new", "shows": "Typed /new sends session/new on the terminal connection."},
+        {"scenario": "tui-new-session", "sequence": 535, "signal": "tui-sends:_x.ai/commands/list", "shows": "The terminal refreshes its command list for the new session."},
+        {"scenario": "tui-new-session", "sequence": 797, "signal": "verification:tui-new-session-outcome", "shows": "Terminal requested and shows a new session; nothing reached control; 33 original-session updates were still written to the terminal during the next control prompt, and the reply was not drawn within the sample."}
+      ],
+      "variants": [
+        {"scenario": "tui-new-session", "sequence": 535, "signal": "tui-sends:_x.ai/marketplace/list", "shows": "The terminal also lists marketplace entries after /new."},
+        {"scenario": "text-load-repeat", "sequence": 196, "signal": "tui-sends:_x.ai/session/info", "shows": "Informational requests at attach."},
+        {"scenario": "text-load-repeat", "sequence": 88, "signal": "connection:tui:opened", "shows": "The terminal attaches through the guard."},
+        {"scenario": "text-load-repeat", "sequence": 1047, "signal": "connection:tui:closed", "shows": "The terminal's connection closes at teardown."},
+        {"scenario": "text-load-repeat", "sequence": 133, "signal": "tui-receives-answer", "shows": "Native answers the terminal's own requests on its connection."},
+        {"scenario": "command-error", "sequence": 390, "signal": "guard-forwards-answer", "shows": "The guard forwards the terminal's answer to a reverse request upstream to native, under the same JSON-RPC id.", "mentions": [{"field": "id", "value": 0}], "follows": [{"sequence": 389, "signal": "tui-replies", "mentions": [{"field": "id", "value": 0}]}]},
+        {"scenario": "text-load-repeat", "sequence": 146, "signal": "tui-sends:_x.ai/log", "shows": "The terminal sends log notifications."},
+        {"scenario": "text-load-repeat", "sequence": 151, "signal": "tui-sends:_x.ai/bundle/status", "shows": "The terminal asks for bundle status."},
+        {"scenario": "text-load-repeat", "sequence": 196, "signal": "tui-sends:_x.ai/billing", "shows": "The terminal asks for billing state."},
+        {"scenario": "text-load-repeat", "sequence": 196, "signal": "tui-sends:_x.ai/prompt_history", "shows": "The terminal asks for prompt history."},
+        {"scenario": "text-load-repeat", "sequence": 175, "signal": "tui-receives:session/update", "shows": "Native streams session updates to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 173, "signal": "tui-receives:_x.ai/session_notification", "shows": "Extension notifications reach the terminal too."},
+        {"scenario": "text-load-repeat", "sequence": 299, "signal": "tui-receives:_x.ai/queue/changed", "shows": "Queue notifications reach the terminal."},
+        {"scenario": "text-load-repeat", "sequence": 494, "signal": "tui-receives:_x.ai/session/prompt_complete", "shows": "Completion notifications reach the terminal."},
+        {"scenario": "text-load-repeat", "sequence": 292, "signal": "tui-receives:_x.ai/sessions/changed", "shows": "Session announcements reach the terminal."},
+        {"scenario": "native-restart-resume", "sequence": 631, "signal": "tui-receives:_x.ai/session/update", "shows": "Resume replay markers reach the resumed terminal."},
+        {"scenario": "text-load-repeat", "sequence": 172, "signal": "tui-receives:_x.ai/mcp_initialized", "shows": "MCP readiness reaches the terminal."},
+        {"scenario": "text-load-repeat", "sequence": 194, "signal": "tui-receives:_x.ai/mcp/init_progress", "shows": "MCP progress reaches the terminal."},
+        {"scenario": "text-load-repeat", "sequence": 176, "signal": "tui-receives:_x.ai/mcp/server_status", "shows": "MCP server status reaches the terminal."},
+        {"scenario": "text-load-repeat", "sequence": 136, "signal": "tui-receives:_x.ai/mcp/servers_updated", "shows": "MCP server updates reach the terminal."},
+        {"scenario": "text-load-repeat", "sequence": 489, "signal": "tui-receives-update:agent_message_chunk", "shows": "Native writes agent_message_chunk to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 361, "signal": "tui-receives-update:agent_thought_chunk", "shows": "Native writes agent_thought_chunk to the terminal as well as to control."},
+        {"scenario": "manual-compaction", "sequence": 1183, "signal": "tui-receives-update:auto_compact_completed", "shows": "Native writes auto_compact_completed to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 175, "signal": "tui-receives-update:available_commands_update", "shows": "Native writes available_commands_update to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 173, "signal": "tui-receives-update:background_tasks", "shows": "Native writes background_tasks to the terminal as well as to control."},
+        {"scenario": "plan-mode-enter", "sequence": 375, "signal": "tui-receives-update:current_mode_update", "shows": "Native writes current_mode_update to the terminal as well as to control."},
+        {"scenario": "image-normalization", "sequence": 418, "signal": "tui-receives-update:image_compressed", "shows": "Native writes image_compressed to the terminal as well as to control."},
+        {"scenario": "image-invalid-bytes", "sequence": 292, "signal": "tui-receives-update:image_dropped", "shows": "Native writes image_dropped to the terminal as well as to control."},
+        {"scenario": "command-success", "sequence": 363, "signal": "tui-receives-update:interaction_resolved", "shows": "Native writes interaction_resolved to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 524, "signal": "tui-receives-update:last_turn_summary", "shows": "Native writes last_turn_summary to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 174, "signal": "tui-receives-update:model_changed", "shows": "Native writes model_changed to the terminal as well as to control."},
+        {"scenario": "command-success", "sequence": 361, "signal": "tui-receives-update:pending_interaction", "shows": "Native writes pending_interaction to the terminal as well as to control."},
+        {"scenario": "todo-transitions", "sequence": 386, "signal": "tui-receives-update:plan", "shows": "Native writes plan to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 491, "signal": "tui-receives-update:response_completed", "shows": "Native writes response_completed to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 318, "signal": "tui-receives-update:session_info_update", "shows": "Native writes session_info_update to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 317, "signal": "tui-receives-update:session_summary_generated", "shows": "Native writes session_summary_generated to the terminal as well as to control."},
+        {"scenario": "native-subagent", "sequence": 570, "signal": "tui-receives-update:subagent_finished", "shows": "Native writes subagent_finished to the terminal as well as to control."},
+        {"scenario": "native-subagent", "sequence": 392, "signal": "tui-receives-update:subagent_spawned", "shows": "Native writes subagent_spawned to the terminal as well as to control."},
+        {"scenario": "command-success", "sequence": 360, "signal": "tui-receives-update:tool_call", "shows": "Native writes tool_call to the terminal as well as to control."},
+        {"scenario": "command-success", "sequence": 355, "signal": "tui-receives-update:tool_call_delta_chunk", "shows": "Native writes tool_call_delta_chunk to the terminal as well as to control."},
+        {"scenario": "command-success", "sequence": 362, "signal": "tui-receives-update:tool_call_update", "shows": "Native writes tool_call_update to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 493, "signal": "tui-receives-update:turn_completed", "shows": "Native writes turn_completed to the terminal as well as to control."},
+        {"scenario": "text-load-repeat", "sequence": 311, "signal": "tui-receives-update:user_message_chunk", "shows": "Native writes user_message_chunk to the terminal as well as to control."}
+      ],
+      "contradictions": [
+        {"scenario": "tui-new-session", "sequence": 569, "signal": "method:session/prompt", "shows": "The original session keeps accepting control prompts after the terminal moved.", "resolution": "Control stays the owner of the assigned conversation; the terminal is fenced, not the session."}
+      ],
+      "gaps": ["Terminal /resume, /fork and /rewind are unrecorded; the fence covers any terminal request that names another session, but their exact wire shape is unknown.", "Whether the terminal ever returns to the assigned conversation on its own is unrecorded.", "Whether the terminal ever answers or acts on requests for a session it moved away from is unrecorded."],
+      "signals": ["tui-sends:initialize", "tui-sends:authenticate", "tui-sends:session/load", "tui-sends:session/new", "tui-sends:_x.ai/commands/list", "tui-sends:_x.ai/marketplace/list", "tui-sends:_x.ai/session/info", "tui-sends:_x.ai/prompt_history", "tui-sends:_x.ai/billing", "tui-sends:_x.ai/bundle/status", "tui-sends:_x.ai/log", "verification:tui-new-session-outcome", "tui-receives-answer", "guard-forwards-answer", "tui-receives:session/update", "tui-receives:_x.ai/session_notification", "tui-receives:_x.ai/queue/changed", "tui-receives:_x.ai/session/prompt_complete", "tui-receives:_x.ai/sessions/changed", "tui-receives:_x.ai/session/update", "tui-receives:_x.ai/mcp_initialized", "tui-receives:_x.ai/mcp/init_progress", "tui-receives:_x.ai/mcp/server_status", "tui-receives:_x.ai/mcp/servers_updated", "connection:tui:opened", "connection:tui:closed", "tui-receives-update:agent_message_chunk", "tui-receives-update:agent_thought_chunk", "tui-receives-update:auto_compact_completed", "tui-receives-update:available_commands_update", "tui-receives-update:background_tasks", "tui-receives-update:current_mode_update", "tui-receives-update:image_compressed", "tui-receives-update:image_dropped", "tui-receives-update:interaction_resolved", "tui-receives-update:last_turn_summary", "tui-receives-update:model_changed", "tui-receives-update:pending_interaction", "tui-receives-update:plan", "tui-receives-update:response_completed", "tui-receives-update:session_info_update", "tui-receives-update:session_summary_generated", "tui-receives-update:subagent_finished", "tui-receives-update:subagent_spawned", "tui-receives-update:tool_call", "tui-receives-update:tool_call_delta_chunk", "tui-receives-update:tool_call_update", "tui-receives-update:turn_completed", "tui-receives-update:user_message_chunk"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "tui-new-session": {"1.0.30": {"verified": 2, "refused": 0, "failed": 1}}, "command-error": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "native-restart-resume": {"1.0.30": {"verified": 1, "refused": 5, "failed": 0}}, "manual-compaction": {"1.0.30": {"verified": 1, "refused": 0, "failed": 1}}, "plan-mode-enter": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "image-normalization": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "image-invalid-bytes": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "command-success": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "todo-transitions": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "native-subagent": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "prompt.write",
+      "question": "What does writing a prompt establish?",
+      "owner": "control",
+      "ownerDetail": "The control session/prompt request write and its receipt.",
+      "expectedOutcome": "A completed write is reported as sent, never as accepted. Acceptance waits for prompt.acceptance.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 288, "signal": "method:session/prompt", "shows": "The prompt request is written."},
+        {"scenario": "text-load-repeat", "sequence": 288, "signal": "action:rpc-requested", "shows": "Harness record of the same write."},
+        {"scenario": "text-load-repeat", "sequence": 296, "signal": "queue:waiting", "shows": "Native lists the prompt only later.", "follows": [{"sequence": 288, "signal": "method:session/prompt"}]}
+      ],
+      "variants": [
+        {"scenario": "text-load-repeat", "sequence": 289, "signal": "control-sends:session/prompt", "shows": "The prompt request frame is written right after the request is issued."}
+      ],
+      "contradictions": [],
+      "gaps": ["No scenario cancels while the first prompt write is still racing native acceptance (manifest coverage gap)."],
+      "signals": ["method:session/prompt", "action:rpc-requested", "control-sends:session/prompt"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "prompt.acceptance",
+      "question": "When has native accepted an app prompt, and which prompt is it?",
+      "owner": "control",
+      "ownerDetail": "_x.ai/queue/changed naming the client-chosen _meta.promptId as a waiting entry or as runningPromptId.",
+      "expectedOutcome": "GrokHeadless sends every prompt with a fresh client-chosen _meta.promptId and reports acceptance on the first queue notification naming that id (waiting or running). Prompts whose ids the app did not issue are foreign (prompt.terminal-typed) and never satisfy an app prompt's acceptance, even with identical text.",
+      "evidence": [
+        {"scenario": "client-supplied-prompt-identity", "sequence": 268, "signal": "method:session/prompt", "shows": "The prompt carries a client-chosen _meta.promptId."},
+        {"scenario": "client-supplied-prompt-identity", "sequence": 276, "signal": "queue:waiting", "shows": "Native lists the prompt as a waiting entry under the client id (the corpus numbers prompt-kind entry ids with prompt ids).", "mentions": [{"field": "id", "value": "prompt-1"}]},
+        {"scenario": "client-supplied-prompt-identity", "sequence": 277, "signal": "queue:running", "shows": "Native reports it running under the same id."},
+        {"scenario": "client-supplied-prompt-identity", "sequence": 498, "signal": "verification:client-prompt-identity", "shows": "The client id was adopted as queue entry, running prompt, completion and result."},
+        {"scenario": "client-supplied-prompt-identity", "sequence": 268, "signal": "prompt-id:client", "shows": "The request carries a client-chosen _meta.promptId."},
+        {"scenario": "cancel-queued-prompt", "sequence": 330, "signal": "queue:waiting-behind-running", "shows": "With client ids on both prompts, the second waits as prompt-2 while prompt-1 runs.", "mentions": [{"field": "id", "value": "prompt-2"}, {"field": "runningPromptId", "value": "prompt-1"}]},
+        {"scenario": "cancel-queued-prompt", "sequence": 551, "signal": "verification:cancel-queued-outcome", "shows": "The record confirms both client ids were adopted: running as runningPromptId and queued as its entry id."},
+        {"scenario": "cancel-queued-prompt", "sequence": 342, "signal": "queue:running", "shows": "The waiting prompt-2 then runs under the same id.", "follows": [{"sequence": 330, "signal": "queue:waiting-behind-running"}], "mentions": [{"field": "runningPromptId", "value": "prompt-2"}]}
+      ],
+      "variants": [
+        {"scenario": "concurrent-prompts", "sequence": 303, "signal": "queue:waiting-behind-running", "shows": "A second prompt is accepted while the first runs."},
+        {"scenario": "concurrent-prompts", "sequence": 706, "signal": "verification:concurrent-results", "shows": "Both identical concurrent prompts completed."},
+        {"scenario": "text-load-repeat", "sequence": 483, "signal": "queue:idle", "shows": "The queue empties before completion is announced."},
+        {"scenario": "text-load-repeat", "sequence": 288, "signal": "prompt-id:native", "shows": "Without a client id, native assigns the prompt id itself."},
+        {"scenario": "text-load-repeat", "sequence": 296, "signal": "method:_x.ai/queue/changed", "shows": "The queue notification that carries acceptance."}
+      ],
+      "contradictions": [
+        {"scenario": "concurrent-tui-then-acp", "sequence": 283, "signal": "queue:waiting", "shows": "A terminal-typed prompt is accepted with exactly the same shape.", "resolution": "Only an app-issued prompt id correlates acceptance; text and shape never do."}
+      ],
+      "gaps": ["Two prompts with identical text and client ids submitted concurrently are unrecorded; concurrent-prompts sent no client ids. Correlation by client id under that case rests on the two-prompt cancel-queued-prompt recording and the one-prompt client-supplied-prompt-identity recording."],
+      "signals": ["method:_x.ai/queue/changed", "queue:waiting", "queue:running", "queue:waiting-behind-running", "queue:idle", "verification:client-prompt-identity", "verification:concurrent-results", "prompt-id:client", "prompt-id:native"],
+      "samples": {"client-supplied-prompt-identity": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "cancel-queued-prompt": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "concurrent-prompts": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "concurrent-tui-then-acp": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "prompt.completion",
+      "question": "When has a prompt's turn completed, and how?",
+      "owner": "control",
+      "ownerDetail": "The session/prompt result stopReason and _x.ai/session/prompt_complete for the same promptId.",
+      "expectedOutcome": "GrokHeadless reports completion once per promptId, from whichever of the result, prompt_complete or the extension turn_completed arrives first, with its stopReason. A normally ended (end_turn) turn reaches consumers once it holds its final appended assistant row without tool calls, or at a bounded deadline with the live reply as its text. That row usually arrived before the completion and sometimes arrives after it. A row goes to the oldest open turn still without one. A row arriving while every open turn already holds one is attributed to no turn, because no recorded turn writes a second final row. Other stop reasons complete at once, because native writes no final row for them. The next prompt may already be running when a completion arrives.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 484, "signal": "sessionUpdate:turn_completed", "shows": "An extension turn_completed carries prompt_id and stop_reason."},
+        {"scenario": "text-load-repeat", "sequence": 485, "signal": "method:_x.ai/session/prompt_complete", "shows": "prompt_complete names the promptId."},
+        {"scenario": "text-load-repeat", "sequence": 487, "signal": "stop:end_turn", "shows": "The result carries the same stopReason and promptId."},
+        {"scenario": "command-success", "sequence": 591, "signal": "method:_x.ai/session/prompt_complete", "shows": "The usual order: the final answer row is already there when the turn completes.", "follows": [{"sequence": 524, "signal": "chat-row:assistant"}]}
+      ],
+      "variants": [
+        {"scenario": "client-supplied-prompt-identity", "sequence": 497, "signal": "action:rpc-result", "shows": "The result arrives well after prompt_complete, with a sidecar inference between.", "follows": [{"sequence": 471, "signal": "method:_x.ai/session/prompt_complete"}]},
+        {"scenario": "concurrent-prompts", "sequence": 510, "signal": "method:_x.ai/session/prompt_complete", "shows": "The first prompt's completion arrives after the second is already running.", "mentions": [{"field": "promptId", "value": "prompt-1"}], "follows": [{"sequence": 509, "signal": "queue:running", "mentions": [{"field": "runningPromptId", "value": "prompt-2"}]}]},
+        {"scenario": "text-load-repeat", "sequence": 482, "signal": "sessionUpdate:response_completed", "shows": "A usage-bearing response_completed precedes turn completion."},
+        {"scenario": "text-load-repeat", "sequence": 522, "signal": "sessionUpdate:last_turn_summary", "shows": "A turn summary arrives after completion."},
+        {"scenario": "client-supplied-prompt-identity", "sequence": 470, "signal": "sessionUpdate:turn_completed", "shows": "The answer precedes the completion here too.", "follows": [{"sequence": 418, "signal": "chat-row:assistant"}]},
+        {"scenario": "concurrent-prompts", "sequence": 508, "signal": "sessionUpdate:turn_completed", "shows": "The first queued turn's answer precedes its completion.", "mentions": [{"field": "prompt_id", "value": "prompt-1"}], "follows": [{"sequence": 456, "signal": "chat-row:assistant"}]},
+        {"scenario": "manual-compaction", "sequence": 669, "signal": "chat-row:assistant", "shows": "A turn's answer row lands after the next prompt was already requested.", "follows": [{"sequence": 664, "signal": "method:session/prompt"}]},
+        {"scenario": "cancel-inference", "sequence": 358, "signal": "durable-outcome:cancelled", "shows": "A cancelled turn ends in events.jsonl with no final assistant row in chat_history.", "follows": [{"sequence": 340, "signal": "stop:cancelled"}]}
+      ],
+      "contradictions": [
+        {"scenario": "text-load-repeat", "sequence": 517, "signal": "chat-row:assistant", "shows": "The durable assistant row is written after the result.", "resolution": "Completion does not mean the transcript is caught up. When the answer has not arrived, the sequencer holds the completion until it does, or until the deadline, so consumers see the answer first. That is an ordering by arrival, not a pairing of live and durable content; reconciling rows stays with the app ledger (history.durable).", "follows": [{"sequence": 487, "signal": "stop:end_turn"}]}
+      ],
+      "gaps": ["When two turns overlap, a late final answer is attributed by arrival order only; no recorded identity links a durable row to its turn.", "A turn that writes more than one final assistant row is unrecorded.", "A result arriving before prompt_complete or turn_completed is unrecorded; first-arrival dedupe is exercised only with a notification first."],
+      "signals": ["method:_x.ai/session/prompt_complete", "action:rpc-result", "stop:end_turn", "sessionUpdate:turn_completed", "sessionUpdate:response_completed", "sessionUpdate:last_turn_summary"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "command-success": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "client-supplied-prompt-identity": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "concurrent-prompts": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "manual-compaction": {"1.0.30": {"verified": 1, "refused": 0, "failed": 1}}, "cancel-inference": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "prompt.cancel",
+      "question": "What does Stop do?",
+      "owner": "control",
+      "ownerDetail": "session/cancel for the session; completion of the running prompt with stopReason cancelled.",
+      "expectedOutcome": "Stop sends session/cancel (decision stop-scope). The running prompt completes cancelled; queued prompts remain queued, start and complete normally, and stay visible as queued until they run.",
+      "evidence": [
+        {"scenario": "cancel-inference", "sequence": 333, "signal": "action:cancel-requested", "shows": "Cancel while inference is outstanding."},
+        {"scenario": "cancel-inference", "sequence": 340, "signal": "stop:cancelled", "shows": "The running prompt completes cancelled."},
+        {"scenario": "cancel-inference", "sequence": 351, "signal": "verification:cancel-outcome", "shows": "The result stopReason is cancelled."},
+        {"scenario": "cancel-queued-prompt", "sequence": 336, "signal": "action:cancel-requested", "shows": "Cancel while a second prompt waits behind the held turn."},
+        {"scenario": "cancel-queued-prompt", "sequence": 342, "signal": "queue:running", "shows": "The queued prompt starts running."},
+        {"scenario": "cancel-queued-prompt", "sequence": 551, "signal": "verification:cancel-queued-outcome", "shows": "Running prompt cancelled (MidTurnAbort); queued prompt ran its own main turn and ended end_turn."}
+      ],
+      "variants": [
+        {"scenario": "concurrent-acp-then-tui", "sequence": 349, "signal": "action:cancel-requested", "shows": "Cancel of a control prompt with a terminal prompt queued behind it."},
+        {"scenario": "concurrent-acp-then-tui", "sequence": 391, "signal": "verification:concurrent-native-submissions", "shows": "The terminal prompt still ran after the cancel."},
+        {"scenario": "cancel-inference", "sequence": 339, "signal": "cancel-category:MidTurnAbort", "shows": "Native categorises the cancellation."},
+        {"scenario": "cancel-inference", "sequence": 334, "signal": "control-sends:session/cancel", "shows": "The cancel notification frame on the control connection."}
+      ],
+      "contradictions": [
+        {"scenario": "cancel-inference", "sequence": 340, "signal": "method:_x.ai/session/prompt_complete", "shows": "No queue-empty notification precedes this cancelled completion.", "resolution": "Idle is derived from completion as well as the queue (session.activity)."},
+        {"scenario": "concurrent-tui-then-acp", "sequence": 337, "signal": "action:cancel-requested", "shows": "The app's cancel, sent while a terminal-typed prompt was running, cancelled that terminal turn (MidTurnAbort), and the app's queued prompt then ran.", "follows": [{"sequence": 331, "signal": "queue:waiting-behind-running"}], "resolution": "Native cancels whichever turn runs. Whether the app offers Stop over a terminal-typed turn is decision stop-foreign-turn, a recommended default awaiting user confirmation.", "precedes": [{"sequence": 344, "signal": "stop:cancelled"}, {"sequence": 346, "signal": "stop:cancelled"}]}
+      ],
+      "gaps": ["Cancel racing the first prompt write is unrecorded."],
+      "signals": ["action:cancel-requested", "stop:cancelled", "cancel-category:MidTurnAbort", "verification:cancel-outcome", "verification:cancel-queued-outcome", "control-sends:session/cancel"],
+      "samples": {"cancel-inference": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "cancel-queued-prompt": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "concurrent-acp-then-tui": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "concurrent-tui-then-acp": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "prompt.terminal-typed",
+      "question": "How do prompts typed into the native terminal reach the app?",
+      "owner": "control",
+      "ownerDetail": "The same queue, user_message_chunk and completion notifications as app prompts, with a prompt id the app did not issue.",
+      "expectedOutcome": "GrokHeadless reports the prompt and its turn from control notifications as a foreign prompt; the app shows it as a normal user message (decision terminal-prompts). It never completes, accepts or cancels an app prompt.",
+      "evidence": [
+        {"scenario": "tui-submit-after-acp", "sequence": 532, "signal": "tui-sends:session/prompt", "shows": "The terminal submits its own prompt on its connection."},
+        {"scenario": "tui-submit-after-acp", "sequence": 545, "signal": "queue:waiting", "shows": "Control sees it accepted."},
+        {"scenario": "tui-submit-after-acp", "sequence": 547, "signal": "sessionUpdate:user_message_chunk", "shows": "Control receives the user message."},
+        {"scenario": "tui-submit-after-acp", "sequence": 764, "signal": "verification:retained-draft-committed", "shows": "The terminal prompt ran and completed under its own prompt id."}
+      ],
+      "variants": [
+        {"scenario": "concurrent-tui-then-acp", "sequence": 562, "signal": "verification:concurrent-native-submissions", "shows": "A terminal prompt running first, then a control prompt queued behind it."}
+      ],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["tui-sends:session/prompt", "sessionUpdate:user_message_chunk", "verification:retained-draft-committed", "verification:concurrent-native-submissions"],
+      "samples": {"tui-submit-after-acp": {"1.0.30": {"verified": 1, "refused": 0, "failed": 1}}, "concurrent-tui-then-acp": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "prompt.uncertain",
+      "question": "What is known about a prompt when the leader is lost?",
+      "owner": "control",
+      "ownerDetail": "A prompt request on the control connection that closed without an answer. Process loss (leader exit, guard hold) is only the cause; the uncertainty is decided where the request is, so the app session never runs a second uncertainty state machine.",
+      "expectedOutcome": "A prompt whose request closed without an answer is reported uncertain (decision uncertain-prompts) and never replayed. Leader loss (process.leader-loss) is one cause; the uncertainty is decided where the request is.",
+      "evidence": [
+        {"scenario": "leader-loss-mid-turn", "sequence": 330, "signal": "action:owned-leader-signal", "shows": "The owned leader is killed mid-turn."},
+        {"scenario": "leader-loss-mid-turn", "sequence": 332, "signal": "guard-reason:upstream-closed", "shows": "The guard holds the terminal."},
+        {"scenario": "leader-loss-mid-turn", "sequence": 335, "signal": "rpc-error:closed", "shows": "The prompt request closes without an answer."},
+        {"scenario": "leader-loss-mid-turn", "sequence": 336, "signal": "verification:mid-turn-loss-outcome", "shows": "The outcome is uncertain."}
+      ],
+      "variants": [
+        {"scenario": "leader-loss-idle", "sequence": 281, "signal": "guard-reason:upstream-closed", "shows": "Idle loss: the guard holds with no prompt in flight."}
+      ],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["rpc-error:closed", "verification:mid-turn-loss-outcome"],
+      "samples": {"leader-loss-mid-turn": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "leader-loss-idle": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "control.rpc-failure",
+      "question": "How are control request failures classified?",
+      "owner": "control",
+      "ownerDetail": "Whether a JSON-RPC error answer was received (remote) or the request closed without one (closed).",
+      "expectedOutcome": "Recorded failures are `remote` (native's JSON-RPC error answer, with a numeric code) and `closed` (the connection closed with the request outstanding). The control client's other codes (timeout, capacity, abort, write, protocol) come from its own code paths and are unrecorded against native. Its uncertain flag does not separate native answers from local failures. Only a request that was written and then closed without an answer is uncertain.",
+      "evidence": [
+        {"scenario": "mcp-remove-restore", "sequence": 308, "signal": "rpc-error:remote", "shows": "A stale MCP call is answered with an error."},
+        {"scenario": "leader-loss-mid-turn", "sequence": 335, "signal": "action:rpc-error", "shows": "A request that closed with the connection."}
+      ],
+      "variants": [],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["action:rpc-error", "rpc-error:remote"],
+      "samples": {"mcp-remove-restore": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "leader-loss-mid-turn": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "stream.live",
+      "question": "Which notifications carry live, provisional session output?",
+      "owner": "control",
+      "ownerDetail": "session/update and _x.ai/session_notification for the assigned session id.",
+      "expectedOutcome": "Live thought, message, tool-delta and informational updates for the assigned session are provisional display state keyed by session id. Updates for other session ids never drive this session (session.identity, content.subagent). They stay provisional. Which durable row, if any, supersedes a live update is not evidenced: the corpus numbers durable tool-call ids and prompt indexes independently of the timeline. Reconciliation therefore belongs to the app ledger (Stage 5), and the package never retires or deduplicates rows.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 314, "signal": "method:session/update", "shows": "Standard ACP session updates."},
+        {"scenario": "text-load-repeat", "sequence": 166, "signal": "method:_x.ai/session_notification", "shows": "Native extension updates on a separate method."},
+        {"scenario": "text-load-repeat", "sequence": 345, "signal": "sessionUpdate:agent_thought_chunk", "shows": "Live reasoning."},
+        {"scenario": "text-load-repeat", "sequence": 480, "signal": "sessionUpdate:agent_message_chunk", "shows": "Live reply text."},
+        {"scenario": "text-load-repeat", "sequence": 295, "signal": "control:notification", "shows": "Every native notification reaches the control observer."}
+      ],
+      "variants": [
+        {"scenario": "text-load-repeat", "sequence": 323, "signal": "sessionUpdate:session_info_update", "shows": "Session info (title) updates."},
+        {"scenario": "text-load-repeat", "sequence": 322, "signal": "sessionUpdate:session_summary_generated", "shows": "Generated session summary."},
+        {"scenario": "text-load-repeat", "sequence": 65, "signal": "sessionUpdate:available_commands_update", "shows": "Native command list."},
+        {"scenario": "text-load-repeat", "sequence": 167, "signal": "sessionUpdate:model_changed", "shows": "Model announcement."},
+        {"scenario": "text-load-repeat", "sequence": 166, "signal": "sessionUpdate:background_tasks", "shows": "Background task list."},
+        {"scenario": "text-load-repeat", "sequence": 480, "signal": "updateType:AgentMessageChunk", "shows": "Live updates carry a native updateType in _meta."},
+        {"scenario": "text-load-repeat", "sequence": 345, "signal": "updateType:AgentThoughtChunk", "shows": "Thought chunk updateType."},
+        {"scenario": "text-load-repeat", "sequence": 65, "signal": "updateType:AvailableCommandsUpdate", "shows": "Command list updateType."}
+      ],
+      "contradictions": [],
+      "gaps": ["The link between a live update and the durable row that supersedes it is unrecorded in shareable evidence."],
+      "signals": ["method:session/update", "method:_x.ai/session_notification", "control:notification", "sessionUpdate:agent_thought_chunk", "sessionUpdate:agent_message_chunk", "sessionUpdate:session_info_update", "sessionUpdate:session_summary_generated", "sessionUpdate:available_commands_update", "sessionUpdate:model_changed", "sessionUpdate:background_tasks", "updateType:AgentMessageChunk", "updateType:AgentThoughtChunk", "updateType:AvailableCommandsUpdate"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "history.durable",
+      "question": "Which source owns the durable transcript?",
+      "owner": "history",
+      "ownerDetail": "Native session files: chat_history.jsonl rows (transcript), updates.jsonl and events.jsonl (durable logs), observed by the physical tailer.",
+      "expectedOutcome": "Committed chat_history rows are the durable transcript. The package emits them with their generation and byte boundaries, and whether each row was appended or re-delivered by a rewrite. Reconciling them with provisional live rows belongs to the app ledger. updates.jsonl and events.jsonl rows restate tool status, stop reasons, mode, turn outcomes and cancellation categories (in both spellings); those are history observations and never decide a control fact. A caught-up boundary is never turn completion or idle.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 52, "signal": "history:observer-attached", "shows": "The observer attaches to chat_history.jsonl."},
+        {"scenario": "text-load-repeat", "sequence": 54, "signal": "chat-row:system", "shows": "System row."},
+        {"scenario": "text-load-repeat", "sequence": 55, "signal": "history:caught-up", "shows": "A caught-up boundary."},
+        {"scenario": "text-load-repeat", "sequence": 72, "signal": "chat-row:user", "shows": "User rows, including synthetic system reminders."},
+        {"scenario": "text-load-repeat", "sequence": 393, "signal": "chat-row:reasoning", "shows": "Durable reasoning row."},
+        {"scenario": "text-load-repeat", "sequence": 517, "signal": "chat-row:assistant", "shows": "Durable assistant row."},
+        {"scenario": "command-success", "sequence": 380, "signal": "chat-row:tool_calls", "shows": "Assistant row with tool calls."},
+        {"scenario": "command-success", "sequence": 410, "signal": "chat-row:tool_result", "shows": "Tool result row."},
+        {"scenario": "text-load-repeat", "sequence": 303, "signal": "events.jsonl:turn_started", "shows": "events.jsonl turn boundaries."}
+      ],
+      "variants": [
+        {"scenario": "text-load-repeat", "sequence": 72, "signal": "chat-synthetic:system_reminder", "shows": "Synthetic reminder rows are user-typed rows."},
+        {"scenario": "text-load-repeat", "sequence": 72, "signal": "chat-part:text", "shows": "Text content parts."},
+        {"scenario": "text-load-repeat", "sequence": 475, "signal": "events.jsonl:turn_ended", "shows": "Turn end in events.jsonl."},
+        {"scenario": "text-load-repeat", "sequence": 204, "signal": "history:row", "shows": "updates.jsonl rows."},
+        {"scenario": "text-load-repeat", "sequence": 443, "signal": "events.jsonl:first_token", "shows": "events.jsonl first token."},
+        {"scenario": "text-load-repeat", "sequence": 325, "signal": "events.jsonl:loop_started", "shows": "events.jsonl agent loop start."},
+        {"scenario": "text-load-repeat", "sequence": 341, "signal": "events.jsonl:phase_changed", "shows": "events.jsonl phase changes."},
+        {"scenario": "command-success", "sequence": 384, "signal": "events.jsonl:tool_started", "shows": "events.jsonl tool start."},
+        {"scenario": "command-success", "sequence": 387, "signal": "events.jsonl:permission_resolved", "shows": "events.jsonl permission resolved, here without any reverse request."},
+        {"scenario": "command-success", "sequence": 412, "signal": "events.jsonl:tool_completed", "shows": "events.jsonl tool completion."},
+        {"scenario": "text-load-repeat", "sequence": 475, "signal": "durable-outcome:completed", "shows": "events.jsonl turn_ended carries outcome completed."},
+        {"scenario": "command-error", "sequence": 421, "signal": "durable-outcome:error", "shows": "events.jsonl tool_completed carries outcome error for a failing command."},
+        {"scenario": "command-success", "sequence": 412, "signal": "durable-outcome:success", "shows": "events.jsonl tool_completed carries outcome success."},
+        {"scenario": "cancel-inference", "sequence": 358, "signal": "durable-outcome:cancelled", "shows": "events.jsonl turn_ended carries outcome cancelled for a cancelled turn. The same string in a permission answer is a control value, which is why durable values are named apart."},
+        {"scenario": "cancel-inference", "sequence": 358, "signal": "durable-cancel-category:mid_turn_abort", "shows": "events.jsonl spells the cancellation category snake_case."},
+        {"scenario": "cancel-inference", "sequence": 360, "signal": "durable-cancel-category:MidTurnAbort", "shows": "A durable row also carries the category in the control spelling."},
+        {"scenario": "permission-cancel", "sequence": 397, "signal": "durable-cancel-category:permission_cancelled", "shows": "A cancelled permission's category, durably."},
+        {"scenario": "permission-cancel", "sequence": 438, "signal": "durable-cancel-category:PermissionCancelled", "shows": "The same category in the control spelling, durably."},
+        {"scenario": "permission-reject-once", "sequence": 394, "signal": "durable-cancel-category:permission_rejected", "shows": "A rejected permission's category, durably."},
+        {"scenario": "permission-reject-once", "sequence": 435, "signal": "durable-cancel-category:PermissionRejected", "shows": "The same category in the control spelling, durably."},
+        {"scenario": "text-load-repeat", "sequence": 515, "signal": "durable-stop:end_turn", "shows": "A durable row restates the turn's stop reason."},
+        {"scenario": "cancel-inference", "sequence": 360, "signal": "durable-stop:cancelled", "shows": "A cancelled turn's stop reason, durably."},
+        {"scenario": "command-success", "sequence": 519, "signal": "durable-status:completed", "shows": "A durable row restates a completed tool status."},
+        {"scenario": "mcp-loop-error", "sequence": 551, "signal": "durable-status:failed", "shows": "A failed MCP call's status, durably."},
+        {"scenario": "plan-mode-enter", "sequence": 542, "signal": "durable-mode:plan", "shows": "A durable row restates plan mode."},
+        {"scenario": "plan-exit-approved", "sequence": 561, "signal": "durable-mode:default", "shows": "A durable row restates the return to default mode."}
+      ],
+      "contradictions": [
+        {"scenario": "command-error", "sequence": 614, "signal": "chat-row:assistant", "shows": "Durable rows land after the prompt result.", "resolution": "Durable rows can land after completion. The package orders a normally ended turn behind its final answer (prompt.completion) and leaves row reconciliation to the app ledger.", "follows": [{"sequence": 582, "signal": "stop:end_turn"}]}
+      ],
+      "gaps": [],
+      "signals": ["history:observer-attached", "history:caught-up", "history:row", "chat-row:system", "chat-row:user", "chat-row:reasoning", "chat-row:assistant", "chat-row:tool_calls", "chat-row:tool_result", "chat-synthetic:system_reminder", "chat-part:text", "events.jsonl:turn_started", "events.jsonl:turn_ended", "events.jsonl:first_token", "events.jsonl:loop_started", "events.jsonl:phase_changed", "events.jsonl:tool_started", "events.jsonl:tool_completed", "events.jsonl:permission_requested", "events.jsonl:permission_resolved", "durable-outcome:completed", "durable-outcome:error", "durable-outcome:success", "durable-outcome:cancelled", "durable-status:completed", "durable-status:failed", "durable-stop:end_turn", "durable-stop:cancelled", "durable-mode:plan", "durable-mode:default", "durable-cancel-category:mid_turn_abort", "durable-cancel-category:MidTurnAbort", "durable-cancel-category:permission_cancelled", "durable-cancel-category:PermissionCancelled", "durable-cancel-category:permission_rejected", "durable-cancel-category:PermissionRejected"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "command-success": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "command-error": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "cancel-inference": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "permission-cancel": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "permission-reject-once": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "mcp-loop-error": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "plan-mode-enter": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "plan-exit-approved": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "history.replacement",
+      "question": "When does native replace the durable transcript, and what bounds the new generation?",
+      "owner": "history",
+      "ownerDetail": "chat_history.jsonl resets observed as a new generation by the physical observer.",
+      "expectedOutcome": "Every reset starts a new generation that supersedes the previous one. Recorded resets fall after the terminal spawns and before it connects, the first prompt, compaction followed by a load, rewind, and resume (twice); the trigger is inferred from arrival order only. The app ledger reconciles rows across generations without duplicating messages. A reset is never a completion, idle or a new prompt, and replacement is expected, not an error.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 53, "signal": "history:reset", "shows": "Generation 0 at session creation."},
+        {"scenario": "text-load-repeat", "sequence": 305, "signal": "history:reset", "shows": "The first prompt rewrites chat_history.jsonl (generation 2)."},
+        {"scenario": "manual-compaction", "sequence": 1170, "signal": "method:_x.ai/compact_conversation", "shows": "Explicit compaction request."},
+        {"scenario": "manual-compaction", "sequence": 1198, "signal": "history:reset", "shows": "A reset follows both the compaction result and the session/load request; arrival order does not say which caused it.", "follows": [{"sequence": 1195, "signal": "method:session/load"}, {"sequence": 1187, "signal": "action:rpc-result"}]},
+        {"scenario": "manual-compaction", "sequence": 1200, "signal": "chat-synthetic:compaction_meta", "shows": "The new generation starts with compaction metadata rows."},
+        {"scenario": "rewind-history-replacement", "sequence": 996, "signal": "method:_x.ai/rewind/execute", "shows": "Rewind execution."},
+        {"scenario": "rewind-history-replacement", "sequence": 1016, "signal": "history:reset", "shows": "Rewind replaces the transcript with the surviving turns."},
+        {"scenario": "rewind-history-replacement", "sequence": 1009, "signal": "verification:rewind-response", "shows": "Rewind succeeded in conversation_only mode."}
+      ],
+      "variants": [
+        {"scenario": "manual-compaction", "sequence": 1186, "signal": "sessionUpdate:auto_compact_completed", "shows": "Live compaction completion."},
+        {"scenario": "manual-compaction", "sequence": 1205, "signal": "sessionUpdate:compaction_checkpoint", "shows": "Compaction checkpoint in updates.jsonl."},
+        {"scenario": "rewind-history-replacement", "sequence": 990, "signal": "method:_x.ai/rewind/points", "shows": "Rewind points listing."},
+        {"scenario": "rewind-history-replacement", "sequence": 995, "signal": "verification:rewind-points", "shows": "Recorded rewind points."},
+        {"scenario": "rewind-history-replacement", "sequence": 1001, "signal": "verification:rewind-preview", "shows": "A preview execution does not rewind."},
+        {"scenario": "rewind-history-replacement", "sequence": 1014, "signal": "sessionUpdate:rewind_marker", "shows": "Rewind marker in updates.jsonl."},
+        {"scenario": "native-restart-resume", "sequence": 679, "signal": "history:reset", "shows": "Resume rewrites the transcript again (generation 4)."},
+        {"scenario": "leader-loss-mid-turn", "sequence": 74, "signal": "history:reset", "shows": "An extra generation before any prompt."},
+        {"scenario": "manual-compaction", "sequence": 1171, "signal": "control-sends:_x.ai/compact_conversation", "shows": "Compaction request frame."},
+        {"scenario": "rewind-history-replacement", "sequence": 991, "signal": "control-sends:_x.ai/rewind/points", "shows": "Rewind points request frame."},
+        {"scenario": "rewind-history-replacement", "sequence": 997, "signal": "control-sends:_x.ai/rewind/execute", "shows": "Rewind execute request frame."},
+        {"scenario": "text-load-repeat", "sequence": 70, "signal": "history:reset", "shows": "A generation-1 reset before any prompt, after the terminal spawns and before it connects; recorded in every scenario, trigger unknown.", "follows": [{"sequence": 62, "signal": "tui:spawn-returned"}], "precedes": [{"sequence": 88, "signal": "connection:tui:opened"}]},
+        {"scenario": "command-error", "sequence": 61, "signal": "history:reset", "shows": "The same pre-prompt reset."},
+        {"scenario": "tui-new-session", "sequence": 89, "signal": "history:reset", "shows": "The same pre-prompt reset."}
+      ],
+      "contradictions": [],
+      "gaps": ["What triggers each reset is not recorded; only arrival order is."],
+      "signals": ["history:reset", "chat-synthetic:compaction_meta", "method:_x.ai/compact_conversation", "sessionUpdate:compaction_checkpoint", "sessionUpdate:auto_compact_completed", "method:_x.ai/rewind/points", "method:_x.ai/rewind/execute", "sessionUpdate:rewind_marker", "verification:rewind-points", "verification:rewind-preview", "verification:rewind-response", "control-sends:_x.ai/compact_conversation", "control-sends:_x.ai/rewind/points", "control-sends:_x.ai/rewind/execute"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "manual-compaction": {"1.0.30": {"verified": 1, "refused": 0, "failed": 1}}, "rewind-history-replacement": {"1.0.30": {"verified": 1, "refused": 0, "failed": 2}}, "native-restart-resume": {"1.0.30": {"verified": 1, "refused": 5, "failed": 0}}, "leader-loss-mid-turn": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "command-error": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "tui-new-session": {"1.0.30": {"verified": 2, "refused": 0, "failed": 1}}}
+    },
+    {
+      "id": "tool.lifecycle",
+      "question": "How do built-in tool calls progress?",
+      "owner": "control",
+      "ownerDetail": "tool_call and tool_call_update for a toolCallId (live), with durable tool_calls and tool_result rows (history.durable).",
+      "expectedOutcome": "GrokHeadless tracks each toolCallId from tool_call through in_progress to completed or failed. A failing command completes with its error as content; a refused call and an MCP tool returning an error fail. Tool kind and native variant select the display shape.",
+      "evidence": [
+        {"scenario": "command-success", "sequence": 344, "signal": "sessionUpdate:tool_call_delta_chunk", "shows": "Streaming tool arguments."},
+        {"scenario": "command-success", "sequence": 349, "signal": "sessionUpdate:tool_call", "shows": "Tool call announced."},
+        {"scenario": "command-success", "sequence": 351, "signal": "tool-kind:execute", "shows": "Kind and variant arrive in an update."},
+        {"scenario": "command-success", "sequence": 384, "signal": "tool_name:run_terminal_command", "shows": "Native tool name."},
+        {"scenario": "file-read-write-edit-search", "sequence": 354, "signal": "tool-kind:edit", "shows": "Write tool."},
+        {"scenario": "command-success", "sequence": 375, "signal": "status:in_progress", "shows": "The call runs."},
+        {"scenario": "command-success", "sequence": 398, "signal": "status:completed", "shows": "The call completes."}
+      ],
+      "variants": [
+        {"scenario": "command-success", "sequence": 351, "signal": "variant:Bash", "shows": "Bash variant."},
+        {"scenario": "file-read-write-edit-search", "sequence": 354, "signal": "variant:Write", "shows": "Write variant."},
+        {"scenario": "file-read-write-edit-search", "sequence": 375, "signal": "tool_name:write", "shows": "write tool name."},
+        {"scenario": "file-read-write-edit-search", "sequence": 483, "signal": "tool_name:search_replace", "shows": "search_replace tool name."},
+        {"scenario": "file-read-write-edit-search", "sequence": 513, "signal": "variant:SearchReplace", "shows": "SearchReplace variant."},
+        {"scenario": "file-read-write-edit-search", "sequence": 567, "signal": "tool-kind:other", "shows": "list_dir reports kind other."},
+        {"scenario": "file-read-write-edit-search", "sequence": 567, "signal": "variant:ListDir", "shows": "ListDir variant."},
+        {"scenario": "file-read-write-edit-search", "sequence": 599, "signal": "tool_name:list_dir", "shows": "list_dir tool name."},
+        {"scenario": "file-read-write-edit-search", "sequence": 639, "signal": "tool-kind:search", "shows": "grep reports kind search."},
+        {"scenario": "file-read-write-edit-search", "sequence": 639, "signal": "variant:Grep", "shows": "Grep variant."},
+        {"scenario": "file-read-write-edit-search", "sequence": 670, "signal": "tool_name:grep", "shows": "grep tool name."},
+        {"scenario": "read-generated-image", "sequence": 364, "signal": "tool-kind:read", "shows": "read_file reports kind read."},
+        {"scenario": "read-generated-image", "sequence": 364, "signal": "variant:ReadFile", "shows": "ReadFile variant."},
+        {"scenario": "read-generated-image", "sequence": 388, "signal": "tool_name:read_file", "shows": "read_file tool name."},
+        {"scenario": "command-success", "sequence": 349, "signal": "updateType:ToolCall", "shows": "Tool call in the durable update log."},
+        {"scenario": "permission-cancel", "sequence": 381, "signal": "status:failed", "shows": "A refused call fails."},
+        {"scenario": "command-success", "sequence": 351, "signal": "updateType:ToolCallUpdate", "shows": "Tool updates carry updateType ToolCallUpdate."},
+        {"scenario": "permission-cancel", "sequence": 394, "signal": "durable-status:failed", "shows": "The failed tool status is also written durably to updates.jsonl."}
+      ],
+      "contradictions": [
+        {"scenario": "command-error", "sequence": 417, "signal": "sessionUpdate:tool_call_update", "shows": "A command that fails still completes with status completed.", "resolution": "Command failure is content, not tool status."},
+        {"scenario": "mcp-loop-error", "sequence": 486, "signal": "status:failed", "shows": "An MCP tool that returns an error result fails the call, unlike a failing command.", "resolution": "MCP tool errors fail the call; command errors are content of a completed call. Display distinguishes by tool family, not by status alone."}
+      ],
+      "gaps": [],
+      "signals": ["sessionUpdate:tool_call", "sessionUpdate:tool_call_update", "sessionUpdate:tool_call_delta_chunk", "tool-kind:execute", "tool-kind:edit", "tool-kind:other", "tool-kind:search", "tool-kind:read", "tool_name:run_terminal_command", "tool_name:write", "tool_name:search_replace", "tool_name:list_dir", "tool_name:grep", "tool_name:read_file", "variant:Bash", "variant:Write", "variant:SearchReplace", "variant:ListDir", "variant:Grep", "variant:ReadFile", "status:completed", "status:failed", "status:in_progress", "updateType:ToolCall", "updateType:ToolCallUpdate"],
+      "samples": {"command-success": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "file-read-write-edit-search": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "read-generated-image": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "permission-cancel": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "command-error": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "mcp-loop-error": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "tool.mcp",
+      "question": "How do MCP servers become available and how are their tools used?",
+      "owner": "control",
+      "ownerDetail": "The session MCP set sent by the app (session/new, update_mcp_servers) and native readiness notifications; model use goes through search_tool and use_tool with server-qualified names.",
+      "expectedOutcome": "The app owns the session MCP set. In both recorded launches (terminal started with --resume by the harness) the terminal's attach loads the session with an empty set and clears it. The app session therefore re-seeds once, when GrokHeadless reports the terminal's load answered, and again after resume. A config_removed that arrives after the re-seed was written belongs to the attach and changes nothing. Readiness is observed for the assigned session only (params.sessionId), after the re-seed: from mcp/list, or from mcp_initialized and server_status that follow config_added. Model-driven MCP calls appear as use_tool with server-qualified names; a direct _x.ai/mcp/call is an app action, not a transcript event.",
+      "evidence": [
+        {"scenario": "mcp-remove-restore", "sequence": 284, "signal": "method:_x.ai/session/update_mcp_servers", "shows": "The app replaces the session MCP set."},
+        {"scenario": "mcp-remove-restore", "sequence": 295, "signal": "method:_x.ai/mcp/list", "shows": "Listing after removal."},
+        {"scenario": "mcp-remove-restore", "sequence": 309, "signal": "verification:mcp-removed", "shows": "A removed server's tool is refused."},
+        {"scenario": "mcp-remove-restore", "sequence": 386, "signal": "verification:mcp-restored", "shows": "Restoring the set restores the tool."},
+        {"scenario": "mcp-loop-echo", "sequence": 384, "signal": "verification:native-qualified-tool-selected", "shows": "search_tool returns the qualified name."},
+        {"scenario": "mcp-loop-echo", "sequence": 415, "signal": "tool_name:fixture__fixture_echo", "shows": "use_tool carries the server-qualified tool name."},
+        {"scenario": "mcp-loop-echo", "sequence": 688, "signal": "verification:mcp-native-followup", "shows": "The model received the tool output."},
+        {"scenario": "text-load-repeat", "sequence": 112, "signal": "method:_x.ai/mcp_initialized", "shows": "An early readiness notification, BEFORE the terminal's attach removes the app's servers; it is not the readiness the session ends up with."},
+        {"scenario": "text-load-repeat", "sequence": 165, "signal": "method:_x.ai/mcp_initialized", "shows": "Right after the terminal's load, native reinitializes MCP with 0 tools.", "follows": [{"sequence": 155, "signal": "tui-sends:session/load"}]},
+        {"scenario": "text-load-repeat", "sequence": 171, "signal": "tui-receives-answer", "shows": "Native answers the terminal's load under the same JSON-RPC id before the app re-seeds. This answer is what GrokHeadless reports as terminal-loaded.", "mentions": [{"field": "id", "value": 3}], "follows": [{"sequence": 155, "signal": "tui-sends:session/load", "mentions": [{"field": "id", "value": 3}]}], "precedes": [{"sequence": 183, "signal": "control-sends:_x.ai/session/update_mcp_servers"}]},
+        {"scenario": "text-load-repeat", "sequence": 169, "signal": "mcp-reason:config_removed", "shows": "The app's server is removed.", "follows": [{"sequence": 165, "signal": "method:_x.ai/mcp_initialized"}]},
+        {"scenario": "text-load-repeat", "sequence": 212, "signal": "mcp-reason:config_added", "shows": "The re-seed adds the server back.", "follows": [{"sequence": 183, "signal": "control-sends:_x.ai/session/update_mcp_servers"}]},
+        {"scenario": "text-load-repeat", "sequence": 264, "signal": "method:_x.ai/mcp_initialized", "shows": "MCP is initialized with the app tools after the re-seed.", "follows": [{"sequence": 212, "signal": "mcp-reason:config_added"}]}
+      ],
+      "variants": [
+        {"scenario": "mcp-direct-rich", "sequence": 271, "signal": "method:_x.ai/mcp/call", "shows": "Direct app MCP call."},
+        {"scenario": "mcp-search", "sequence": 348, "signal": "variant:SearchTool", "shows": "SearchTool variant."},
+        {"scenario": "mcp-search", "sequence": 430, "signal": "tool_name:search_tool", "shows": "search_tool name."},
+        {"scenario": "mcp-loop-echo", "sequence": 417, "signal": "variant:UseTool", "shows": "UseTool variant."},
+        {"scenario": "mcp-loop-echo", "sequence": 442, "signal": "tool_name:use_tool", "shows": "use_tool name."},
+        {"scenario": "mcp-loop-echo", "sequence": 470, "signal": "events.jsonl:mcp_tool_call_started", "shows": "events.jsonl MCP call start with the bare tool name."},
+        {"scenario": "mcp-loop-echo", "sequence": 470, "signal": "tool_name:fixture_echo", "shows": "Bare tool name in events.jsonl."},
+        {"scenario": "mcp-loop-echo", "sequence": 494, "signal": "events.jsonl:mcp_tool_call_completed", "shows": "events.jsonl MCP call end."},
+        {"scenario": "mcp-loop-error", "sequence": 432, "signal": "tool_name:fixture__fixture_error", "shows": "Error-returning tool."},
+        {"scenario": "mcp-loop-error", "sequence": 473, "signal": "tool_name:fixture_error", "shows": "Bare error tool name."},
+        {"scenario": "mcp-loop-image", "sequence": 412, "signal": "tool_name:fixture__fixture_image", "shows": "Image-returning tool."},
+        {"scenario": "mcp-loop-image", "sequence": 469, "signal": "tool_name:fixture_image", "shows": "Bare image tool name."},
+        {"scenario": "mcp-loop-mixed", "sequence": 412, "signal": "tool_name:fixture__fixture_mixed", "shows": "Mixed-content tool."},
+        {"scenario": "mcp-loop-mixed", "sequence": 452, "signal": "tool_name:fixture_mixed", "shows": "Bare mixed tool name."},
+        {"scenario": "mcp-loop-structured", "sequence": 399, "signal": "tool_name:fixture__fixture_structured", "shows": "Structured-content tool."},
+        {"scenario": "mcp-loop-structured", "sequence": 472, "signal": "tool_name:fixture_structured", "shows": "Bare structured tool name."},
+        {"scenario": "text-load-repeat", "sequence": 64, "signal": "method:_x.ai/mcp/init_progress", "shows": "Initialization progress."},
+        {"scenario": "text-load-repeat", "sequence": 110, "signal": "method:_x.ai/mcp/server_status", "shows": "Per-server status."},
+        {"scenario": "text-load-repeat", "sequence": 46, "signal": "method:_x.ai/mcp/servers_updated", "shows": "Server set updated."},
+        {"scenario": "text-load-repeat", "sequence": 67, "signal": "events.jsonl:mcp_config_resolved", "shows": "events.jsonl MCP config."},
+        {"scenario": "text-load-repeat", "sequence": 68, "signal": "events.jsonl:mcp_server_starting", "shows": "events.jsonl server start."},
+        {"scenario": "text-load-repeat", "sequence": 116, "signal": "events.jsonl:mcp_server_connected", "shows": "events.jsonl server connected."},
+        {"scenario": "text-load-repeat", "sequence": 117, "signal": "events.jsonl:mcp_init_completed", "shows": "events.jsonl init completed."},
+        {"scenario": "text-load-repeat", "sequence": 276, "signal": "events.jsonl:mcp_health_check", "shows": "events.jsonl health check."},
+        {"scenario": "text-load-repeat", "sequence": 183, "signal": "control-sends:_x.ai/session/update_mcp_servers", "shows": "The harness re-seeds the set over control after the terminal attached. It appears only as this control write frame; the harness records no action line for it."},
+        {"scenario": "text-load-repeat", "sequence": 191, "signal": "control-sends:_x.ai/mcp/list", "shows": "Readiness is polled by listing."},
+        {"scenario": "mcp-direct-rich", "sequence": 272, "signal": "control-sends:_x.ai/mcp/call", "shows": "Direct MCP call frame."},
+        {"scenario": "text-load-repeat", "sequence": 110, "signal": "mcp-status:ready", "shows": "The app's server is ready after the initial seeding."},
+        {"scenario": "text-load-repeat", "sequence": 110, "signal": "mcp-reason:initialized", "shows": "Ready reason."},
+        {"scenario": "text-load-repeat", "sequence": 169, "signal": "mcp-status:unavailable", "shows": "Removed servers report unavailable."},
+        {"scenario": "text-load-repeat", "sequence": 212, "signal": "mcp-status:initializing", "shows": "Re-added servers initialize again."},
+        {"scenario": "concurrent-tui-then-acp", "sequence": 188, "signal": "mcp-reason:config_added", "shows": "Arrival order varies: config_added can be observed before the config_removed it supersedes.", "precedes": [{"sequence": 189, "signal": "mcp-reason:config_removed"}]},
+        {"scenario": "cancel-queued-prompt", "sequence": 187, "signal": "mcp-reason:config_removed", "shows": "The removal caused by the terminal's attach usually arrives after the re-seed was already written; that removal is expected and must not trigger another re-seed.", "follows": [{"sequence": 171, "signal": "control-sends:_x.ai/session/update_mcp_servers"}]}
+      ],
+      "contradictions": [
+        {"scenario": "text-load-repeat", "sequence": 155, "signal": "tui-sends:session/load", "shows": "The terminal's attach loads the session with mcpServers: [] (every terminal load in the corpus carries an empty set).", "resolution": "The attach clears the session MCP set as a side effect. The app session owns the set and re-seeds it after the terminal's load has been answered, and readiness counts only after that re-seed."},
+        {"scenario": "native-subagent", "sequence": 430, "signal": "other-session:method:_x.ai/mcp_initialized", "shows": "A child session's MCP initializes with 0 tools on the same connection, after the assigned session was already ready.", "follows": [{"sequence": 253, "signal": "method:_x.ai/mcp_initialized"}], "resolution": "Readiness is keyed by params.sessionId. Another session's MCP notifications never change the assigned session's readiness."}
+      ],
+      "gaps": ["Real model-driven MCP discovery and reseeding through reload/resume with a real model are unrecorded (plan unknown 7).", "Whether the terminal can attach without clearing the session MCP set is unrecorded.", "Whether a terminal launched other than with --resume also clears the set on attach is unrecorded."],
+      "signals": ["method:_x.ai/session/update_mcp_servers", "method:_x.ai/mcp/list", "method:_x.ai/mcp/call", "method:_x.ai/mcp_initialized", "method:_x.ai/mcp/init_progress", "method:_x.ai/mcp/server_status", "method:_x.ai/mcp/servers_updated", "verification:mcp-removed", "verification:mcp-restored", "verification:native-qualified-tool-selected", "verification:mcp-native-followup", "variant:SearchTool", "variant:UseTool", "tool_name:search_tool", "tool_name:use_tool", "tool_name:fixture__fixture_echo", "tool_name:fixture_echo", "tool_name:fixture__fixture_error", "tool_name:fixture_error", "tool_name:fixture__fixture_image", "tool_name:fixture_image", "tool_name:fixture__fixture_mixed", "tool_name:fixture_mixed", "tool_name:fixture__fixture_structured", "tool_name:fixture_structured", "events.jsonl:mcp_tool_call_started", "events.jsonl:mcp_tool_call_completed", "events.jsonl:mcp_config_resolved", "events.jsonl:mcp_server_starting", "events.jsonl:mcp_server_connected", "events.jsonl:mcp_init_completed", "events.jsonl:mcp_health_check", "control-sends:_x.ai/mcp/list", "control-sends:_x.ai/session/update_mcp_servers", "control-sends:_x.ai/mcp/call", "mcp-status:ready", "mcp-status:unavailable", "mcp-status:initializing", "mcp-reason:initialized", "mcp-reason:config_removed", "mcp-reason:config_added"],
+      "samples": {"mcp-remove-restore": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "mcp-loop-echo": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "mcp-direct-rich": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "mcp-search": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "mcp-loop-error": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "mcp-loop-image": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "mcp-loop-mixed": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "mcp-loop-structured": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "concurrent-tui-then-acp": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "cancel-queued-prompt": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "native-subagent": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "interaction.permission",
+      "question": "Who may answer a permission request, and what happens to a stale answer?",
+      "owner": "control",
+      "ownerDetail": "The current session/request_permission reverse request and its token; resolution by either client ends it.",
+      "expectedOutcome": "A permission is answerable from Agent Code only while its control reverse request is outstanding. Native offers the same request to the terminal, sometimes before control and sometimes after control has answered, and the first answer wins. A terminal answer retires the app's action (seen as interaction_resolved on control), and the control client refuses a late app answer before writing it. A cancelled or rejected permission fails the tool and completes the turn cancelled. A pending_interaction without a reverse request is native self-resolution and is not surfaced.",
+      "evidence": [
+        {"scenario": "command-error", "sequence": 369, "signal": "method:session/request_permission", "shows": "Native asks control for permission."},
+        {"scenario": "command-error", "sequence": 369, "signal": "control:reverse-request", "shows": "Reverse request with a token."},
+        {"scenario": "permission-cancel", "sequence": 364, "signal": "action:reverse-reply-attempt", "shows": "Control answers cancelled."},
+        {"scenario": "permission-cancel", "sequence": 367, "signal": "action:reverse-reply-written", "shows": "The answer is written."},
+        {"scenario": "permission-cancel", "sequence": 402, "signal": "stop:cancelled", "shows": "The turn completes cancelled."},
+        {"scenario": "permission-dual-client-race", "sequence": 622, "signal": "verification:dual-client-permission-outcome", "shows": "The terminal resolved first. The app's later answer was refused by our control client (stale-request, the token already retired locally) and was never written. The turn completed."},
+        {"scenario": "command-error", "sequence": 350, "signal": "tui-receives:session/request_permission", "shows": "Native offers the same permission request to the terminal."},
+        {"scenario": "permission-dual-client-race", "sequence": 396, "signal": "tui-replies-outcome:selected", "shows": "The terminal answers on its own connection before control hears interaction_resolved."},
+        {"scenario": "command-error", "sequence": 367, "signal": "sessionUpdate:pending_interaction", "shows": "Native announces the pending permission."},
+        {"scenario": "command-error", "sequence": 393, "signal": "sessionUpdate:interaction_resolved", "shows": "Resolution retires it.", "follows": [{"sequence": 369, "signal": "control:reverse-request"}]}
+      ],
+      "variants": [
+        {"scenario": "command-error", "sequence": 388, "signal": "action:tui-permission-key", "shows": "Resolution by a terminal key press."},
+        {"scenario": "permission-allow-once", "sequence": 374, "signal": "action:tui-permission-key", "shows": "Allow-once chosen in the terminal while control holds the same request."},
+        {"scenario": "permission-allow-once", "sequence": 603, "signal": "verification:permission-file-outcome", "shows": "The allowed command ran."},
+        {"scenario": "command-success", "sequence": 350, "signal": "tool-kind:permission", "shows": "Pending interaction kind permission."},
+        {"scenario": "file-read-write-edit-search", "sequence": 381, "signal": "outcome:selected", "shows": "Allow-once selection."},
+        {"scenario": "permission-cancel", "sequence": 364, "signal": "outcome:cancelled", "shows": "Cancelled outcome."},
+        {"scenario": "permission-cancel", "sequence": 401, "signal": "cancel-category:PermissionCancelled", "shows": "Cancellation category."},
+        {"scenario": "permission-reject-once", "sequence": 402, "signal": "cancel-category:PermissionRejected", "shows": "Rejection category."},
+        {"scenario": "permission-cancel", "sequence": 426, "signal": "verification:permission-file-outcome", "shows": "The refused command did not run."},
+        {"scenario": "command-error", "sequence": 389, "signal": "tui-replies", "shows": "The terminal replies to a request on its connection."},
+        {"scenario": "command-success", "sequence": 374, "signal": "sessionUpdate:interaction_resolved", "shows": "The self-resolved permission is announced resolved."},
+        {"scenario": "permission-cancel", "sequence": 384, "signal": "tui-replies-error", "shows": "After control had answered, the terminal still received the request and answered it with an error, which the guard forwarded upstream.", "mentions": [{"field": "id", "value": 0}], "follows": [{"sequence": 367, "signal": "action:reverse-reply-written"}, {"sequence": 372, "signal": "tui-receives:session/request_permission", "mentions": [{"field": "id", "value": 0}]}], "precedes": [{"sequence": 385, "signal": "guard-forwards-answer", "mentions": [{"field": "id", "value": 0}]}]},
+        {"scenario": "permission-reject-once", "sequence": 353, "signal": "control:reverse-request", "shows": "The terminal can receive the same request before control does.", "follows": [{"sequence": 335, "signal": "tui-receives:session/request_permission"}]}
+      ],
+      "contradictions": [
+        {"scenario": "command-success", "sequence": 386, "signal": "events.jsonl:permission_requested", "shows": "Native logs a permission that it resolved itself with no reverse request.", "resolution": "Only a reverse request creates an answerable permission."},
+        {"scenario": "command-success", "sequence": 350, "signal": "sessionUpdate:pending_interaction", "shows": "A pending permission with no reverse request to either client: native resolved it itself (events.jsonl decision allow).", "resolution": "Only a reverse request creates an answerable permission. A pending_interaction without one is not surfaced as a condition."},
+        {"scenario": "file-read-write-edit-search", "sequence": 438, "signal": "tool-kind:permission", "shows": "Another self-resolved permission; they recur in this timeline and in sixteen other scenarios.", "resolution": "Same rule: without a reverse request there is nothing to answer."}
+      ],
+      "gaps": ["What native does with a late answer written by control after resolution is unrecorded; the app's late answer is refused client-side before any write. Late terminal answers were recorded and changed nothing."],
+      "signals": ["method:session/request_permission", "control:reverse-request", "sessionUpdate:pending_interaction", "sessionUpdate:interaction_resolved", "action:reverse-reply-attempt", "action:reverse-reply-written", "action:tui-permission-key", "tool-kind:permission", "outcome:selected", "outcome:cancelled", "cancel-category:PermissionCancelled", "cancel-category:PermissionRejected", "verification:permission-file-outcome", "verification:dual-client-permission-outcome", "tui-receives:session/request_permission", "tui-replies", "tui-replies-outcome:selected", "tui-replies-error"],
+      "samples": {"command-error": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "permission-cancel": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "permission-dual-client-race": {"1.0.30": {"verified": 1, "refused": 0, "failed": 2}}, "permission-allow-once": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}, "1.0.25": {"verified": 1, "refused": 0, "failed": 0}}, "command-success": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "file-read-write-edit-search": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "permission-reject-once": {"1.0.25": {"verified": 1, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "interaction.question",
+      "question": "How are native questions asked and answered?",
+      "owner": "control",
+      "ownerDetail": "_x.ai/ask_user_question reverse request with a token.",
+      "expectedOutcome": "GrokHeadless exposes the question while its reverse request is outstanding; accepted answers (single, multiple, free-form with annotations) or cancellation complete the question tool, and the turn continues either way.",
+      "evidence": [
+        {"scenario": "question-single", "sequence": 334, "signal": "method:_x.ai/ask_user_question", "shows": "Native asks a question."},
+        {"scenario": "question-single", "sequence": 333, "signal": "tool-kind:question", "shows": "Pending interaction kind question."},
+        {"scenario": "question-single", "sequence": 367, "signal": "outcome:accepted", "shows": "Accepted answer."}
+      ],
+      "variants": [
+        {"scenario": "question-single", "sequence": 331, "signal": "variant:AskUserQuestion", "shows": "AskUserQuestion variant."},
+        {"scenario": "question-single", "sequence": 361, "signal": "tool_name:ask_user_question", "shows": "ask_user_question tool name."},
+        {"scenario": "question-cancel", "sequence": 373, "signal": "outcome:cancelled", "shows": "Cancelled question; the turn still completes end_turn."},
+        {"scenario": "question-multi", "sequence": 381, "signal": "outcome:accepted", "shows": "Multi-select answer with two options."},
+        {"scenario": "question-freeform", "sequence": 402, "signal": "outcome:accepted", "shows": "Free-form answer with annotations."},
+        {"scenario": "question-single", "sequence": 346, "signal": "tui-receives:_x.ai/ask_user_question", "shows": "Native offers the question to the terminal too."},
+        {"scenario": "question-cancel", "sequence": 381, "signal": "tui-receives:_x.ai/ask_user_question", "shows": "The terminal received the question after control had already answered it.", "follows": [{"sequence": 376, "signal": "action:reverse-reply-written"}]}
+      ],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["method:_x.ai/ask_user_question", "tool-kind:question", "outcome:accepted", "variant:AskUserQuestion", "tool_name:ask_user_question", "tui-receives:_x.ai/ask_user_question"],
+      "samples": {"question-single": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "question-cancel": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "question-multi": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "question-freeform": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "interaction.plan",
+      "question": "How are plan mode and plan approval represented?",
+      "owner": "control",
+      "ownerDetail": "enter_plan_mode tool with current_mode_update; _x.ai/exit_plan_mode reverse request carrying planContent.",
+      "expectedOutcome": "GrokHeadless reports mode changes from current_mode_update and exposes plan approval while its reverse request is outstanding. Approved and abandoned leave plan mode; cancelled (with feedback) stays in plan mode.",
+      "evidence": [
+        {"scenario": "plan-mode-enter", "sequence": 363, "signal": "sessionUpdate:current_mode_update", "shows": "Entering plan mode changes the mode."},
+        {"scenario": "plan-exit-approved", "sequence": 499, "signal": "method:_x.ai/exit_plan_mode", "shows": "Native asks for plan approval with plan content."},
+        {"scenario": "plan-exit-approved", "sequence": 529, "signal": "outcome:approved", "shows": "Approved."},
+        {"scenario": "plan-exit-approved", "sequence": 542, "signal": "sessionUpdate:current_mode_update", "shows": "Mode changes after approval."},
+        {"scenario": "plan-exit-abandoned", "sequence": 534, "signal": "outcome:abandoned", "shows": "Abandoned."},
+        {"scenario": "plan-mode-enter", "sequence": 363, "signal": "mode:plan", "shows": "Entering plan mode reports mode plan."},
+        {"scenario": "plan-exit-approved", "sequence": 542, "signal": "mode:default", "shows": "Approval returns to mode default.", "follows": [{"sequence": 529, "signal": "outcome:approved"}]}
+      ],
+      "variants": [
+        {"scenario": "plan-mode-enter", "sequence": 361, "signal": "variant:EnterPlanMode", "shows": "EnterPlanMode variant."},
+        {"scenario": "plan-mode-enter", "sequence": 446, "signal": "tool_name:enter_plan_mode", "shows": "enter_plan_mode tool name."},
+        {"scenario": "plan-exit-approved", "sequence": 496, "signal": "variant:ExitPlanMode", "shows": "ExitPlanMode variant."},
+        {"scenario": "plan-exit-approved", "sequence": 498, "signal": "tool-kind:plan_approval", "shows": "Pending interaction kind plan_approval."},
+        {"scenario": "plan-exit-approved", "sequence": 509, "signal": "tool_name:exit_plan_mode", "shows": "exit_plan_mode tool name."},
+        {"scenario": "plan-exit-cancelled", "sequence": 515, "signal": "outcome:cancelled", "shows": "Cancelled with feedback: no mode change follows."},
+        {"scenario": "plan-exit-approved", "sequence": 476, "signal": "tui-receives:_x.ai/exit_plan_mode", "shows": "Native offers plan approval to the terminal too."},
+        {"scenario": "plan-exit-cancelled", "sequence": 529, "signal": "tui-replies-outcome:cancelled", "shows": "The terminal answers cancelled here too."},
+        {"scenario": "plan-exit-abandoned", "sequence": 557, "signal": "tui-replies-outcome:cancelled", "shows": "And after an abandoned plan."}
+      ],
+      "contradictions": [
+        {"scenario": "plan-exit-approved", "sequence": 557, "signal": "tui-replies-outcome:cancelled", "shows": "After control approved and the mode changed, the terminal answered the same request cancelled, and the guard forwarded that answer upstream.", "follows": [{"sequence": 542, "signal": "mode:default"}], "resolution": "The first answer wins. The terminal's late answer to a resolved request changes nothing recorded (the mode stays default). The app never treats a terminal reply as a new decision.", "mentions": [{"field": "id", "value": 0}], "precedes": [{"sequence": 558, "signal": "guard-forwards-answer", "mentions": [{"field": "id", "value": 0}]}]}
+      ],
+      "gaps": [],
+      "signals": ["sessionUpdate:current_mode_update", "method:_x.ai/exit_plan_mode", "outcome:approved", "outcome:abandoned", "variant:EnterPlanMode", "tool_name:enter_plan_mode", "variant:ExitPlanMode", "tool-kind:plan_approval", "tool_name:exit_plan_mode", "tui-receives:_x.ai/exit_plan_mode", "mode:plan", "mode:default", "tui-replies-outcome:cancelled"],
+      "samples": {"plan-mode-enter": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "plan-exit-approved": {"1.0.30": {"verified": 2, "refused": 0, "failed": 0}}, "plan-exit-abandoned": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "plan-exit-cancelled": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "content.todos",
+      "question": "How are todo lists represented?",
+      "owner": "control",
+      "ownerDetail": "todo_write tool calls followed by session/update plan with the full list.",
+      "expectedOutcome": "The latest plan update is the todo list; merge writes are already applied by native, so the app replaces its list with each plan update.",
+      "evidence": [
+        {"scenario": "todo-transitions", "sequence": 357, "signal": "variant:TodoWrite", "shows": "todo_write tool call."},
+        {"scenario": "todo-transitions", "sequence": 384, "signal": "sessionUpdate:plan", "shows": "Plan update after the write."},
+        {"scenario": "todo-transitions", "sequence": 406, "signal": "tool_name:todo_write", "shows": "todo_write tool name."}
+      ],
+      "variants": [
+        {"scenario": "todo-transitions", "sequence": 357, "signal": "tool-kind:think", "shows": "todo_write reports kind think."},
+        {"scenario": "todo-transitions", "sequence": 384, "signal": "updateType:Plan", "shows": "Plan in the durable update log."}
+      ],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["variant:TodoWrite", "sessionUpdate:plan", "tool_name:todo_write", "tool-kind:think", "updateType:Plan"],
+      "samples": {"todo-transitions": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "content.subagent",
+      "question": "How are native subagents attributed to the main turn?",
+      "owner": "control",
+      "ownerDetail": "subagent_spawned naming child_session_id and parent_prompt_id; child session notifications on the same control connection; subagent_finished.",
+      "expectedOutcome": "Child session notifications are attributed to the parent turn only through the child_session_id announced by subagent_spawned; they never count as the main session's prompts, acceptance or completion.",
+      "evidence": [
+        {"scenario": "native-subagent", "sequence": 370, "signal": "tool_name:spawn_subagent", "shows": "spawn_subagent tool."},
+        {"scenario": "native-subagent", "sequence": 390, "signal": "sessionUpdate:subagent_spawned", "shows": "Child session announced with parent prompt id."},
+        {"scenario": "native-subagent", "sequence": 409, "signal": "other-session:queue:waiting", "shows": "The child session's own queue on the same connection."},
+        {"scenario": "native-subagent", "sequence": 567, "signal": "sessionUpdate:subagent_finished", "shows": "Child finished."}
+      ],
+      "variants": [
+        {"scenario": "native-subagent", "sequence": 360, "signal": "variant:Task", "shows": "Task variant."}
+      ],
+      "contradictions": [],
+      "gaps": ["Nested or failing subagents are unrecorded."],
+      "signals": ["tool_name:spawn_subagent", "sessionUpdate:subagent_spawned", "sessionUpdate:subagent_finished", "variant:Task"],
+      "samples": {"native-subagent": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "content.input",
+      "question": "How does native treat prompt content blocks?",
+      "owner": "control",
+      "ownerDetail": "The prompt result and image notifications; native does not reject unusable content up front.",
+      "expectedOutcome": "Images, resource links and embedded resources are sent as ACP content blocks. Native accepts invalid or oversized images and unavailable resource links without rejecting the prompt, reporting image_dropped or image_compressed instead; the app surfaces those notices rather than treating the prompt as failed.",
+      "evidence": [
+        {"scenario": "image-content-1", "sequence": 535, "signal": "verification:inference-image-count", "shows": "The image reached inference."},
+        {"scenario": "image-content-1", "sequence": 333, "signal": "chat-part:image", "shows": "Durable image content part."},
+        {"scenario": "image-invalid-bytes", "sequence": 287, "signal": "sessionUpdate:image_dropped", "shows": "Invalid image bytes are dropped with a notice."},
+        {"scenario": "image-invalid-bytes", "sequence": 503, "signal": "verification:invalid-image-outcome", "shows": "The prompt was not rejected."},
+        {"scenario": "image-normalization", "sequence": 310, "signal": "sessionUpdate:image_compressed", "shows": "Wide images are compressed with a notice."},
+        {"scenario": "resource-link-unavailable", "sequence": 505, "signal": "verification:unavailable-resource-outcome", "shows": "An unavailable resource link does not reject the prompt."}
+      ],
+      "variants": [
+        {"scenario": "image-normalization", "sequence": 501, "signal": "verification:wide-image-input", "shows": "The compressed image reached inference."},
+        {"scenario": "image-content-2", "sequence": 480, "signal": "verification:inference-image-count", "shows": "Two images in one prompt both reached inference."},
+        {"scenario": "resource-link-input", "sequence": 278, "signal": "method:session/prompt", "shows": "A prompt with a resource_link content block completes normally."},
+        {"scenario": "embedded-resource-input", "sequence": 278, "signal": "method:session/prompt", "shows": "A prompt with an embedded text resource completes normally."},
+        {"scenario": "read-generated-image", "sequence": 610, "signal": "verification:tool-image-followup", "shows": "An image read by a tool reaches the follow-up inference."}
+      ],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["verification:inference-image-count", "chat-part:image", "sessionUpdate:image_dropped", "verification:invalid-image-outcome", "sessionUpdate:image_compressed", "verification:unavailable-resource-outcome", "verification:wide-image-input", "verification:tool-image-followup"],
+      "samples": {"image-content-1": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "image-invalid-bytes": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "image-normalization": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "resource-link-unavailable": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "image-content-2": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "resource-link-input": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "embedded-resource-input": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "read-generated-image": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "terminal.draft",
+      "question": "What happens to a draft in the native terminal when Agent Code sends a prompt?",
+      "owner": "terminal-connection",
+      "ownerDetail": "The native terminal's own input buffer; external prompts do not touch it.",
+      "expectedOutcome": "An app prompt never overwrites or submits a terminal draft; a later terminal submission is a terminal-typed prompt.",
+      "evidence": [
+        {"scenario": "tui-draft-during-acp", "sequence": 499, "signal": "verification:native-draft-after-acp", "shows": "The draft was retained across the control prompt."}
+      ],
+      "variants": [],
+      "contradictions": [],
+      "gaps": ["Drafts across terminal restart are unrecorded."],
+      "signals": ["verification:native-draft-after-acp"],
+      "samples": {"tui-draft-during-acp": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "process.lifecycle",
+      "question": "Who starts and stops the leader, guard and terminal, and in what order?",
+      "owner": "process",
+      "ownerDetail": "Process lifetimes owned by the app session. The only start ordering native forces is leader and guard before the terminal: the terminal connects to or spawns a leader with no connect-only option. The guard itself has no recorded start or release event; its upstream connection opens when the terminal attaches.",
+      "expectedOutcome": "The app session starts the owned leader and the guard before the terminal PTY; their order relative to each other is neither recorded nor forced. In the recorded (harness) order the session is created over control before the terminal exists, which matches how Agent Code pre-creates OpenCode Terminal sessions in the app; other orders are unrecorded. Recorded stop order: close requested, control connection closing, guard hold, terminal signalled, guard upstream closed, control connection closed, terminal exit acknowledged, leader exit, control close complete. The control close is reported uncertain by design.",
+      "evidence": [
+        {"scenario": "text-load-repeat", "sequence": 2, "signal": "leader:spawned", "shows": "The owned leader starts first."},
+        {"scenario": "text-load-repeat", "sequence": 61, "signal": "lifecycle:tui-containment", "shows": "The terminal is contained."},
+        {"scenario": "text-load-repeat", "sequence": 62, "signal": "tui:spawn-returned", "shows": "The terminal PTY is spawned after session creation."},
+        {"scenario": "text-load-repeat", "sequence": 1037, "signal": "action:close-requested", "shows": "Close requested."},
+        {"scenario": "text-load-repeat", "sequence": 1038, "signal": "connection:control:closing", "shows": "Close starts by closing the control connection.", "follows": [{"sequence": 1037, "signal": "action:close-requested"}]},
+        {"scenario": "text-load-repeat", "sequence": 1039, "signal": "guard-reason:owner-stopped", "shows": "The guard holds the terminal.", "follows": [{"sequence": 1038, "signal": "connection:control:closing"}]},
+        {"scenario": "text-load-repeat", "sequence": 1040, "signal": "action:tui-signal", "shows": "The terminal is signalled.", "follows": [{"sequence": 1039, "signal": "guard:holding"}]},
+        {"scenario": "text-load-repeat", "sequence": 1041, "signal": "connection:guard-upstream:closed", "shows": "The guard's upstream connection closes.", "follows": [{"sequence": 1040, "signal": "action:tui-signal"}]},
+        {"scenario": "text-load-repeat", "sequence": 1042, "signal": "connection:control:closed", "shows": "The control connection has closed.", "follows": [{"sequence": 1041, "signal": "connection:guard-upstream:closed"}]},
+        {"scenario": "text-load-repeat", "sequence": 1046, "signal": "tui:exited", "shows": "Terminal exit is acknowledged.", "follows": [{"sequence": 1042, "signal": "connection:control:closed"}]},
+        {"scenario": "text-load-repeat", "sequence": 1048, "signal": "leader:exited", "shows": "The leader exits last.", "follows": [{"sequence": 1046, "signal": "tui:exited"}]},
+        {"scenario": "text-load-repeat", "sequence": 1049, "signal": "lifecycle:control-close-complete", "shows": "Control close completes.", "follows": [{"sequence": 1048, "signal": "leader:exited"}]}
+      ],
+      "variants": [
+        {"scenario": "text-load-repeat", "sequence": 1039, "signal": "guard:holding", "shows": "Guard holding state."},
+        {"scenario": "text-load-repeat", "sequence": 3, "signal": "connection:control:closing", "shows": "Connection attempts before the leader admits one close and are retried."},
+        {"scenario": "text-load-repeat", "sequence": 17, "signal": "connection:control:opened", "shows": "The admitted control connection opens."},
+        {"scenario": "text-load-repeat", "sequence": 24, "signal": "control-sends:initialize", "shows": "Control initializes ACP."},
+        {"scenario": "text-load-repeat", "sequence": 96, "signal": "connection:guard-upstream:opened", "shows": "The guard's upstream connection opens only after the terminal's connection.", "follows": [{"sequence": 88, "signal": "connection:tui:opened"}]}
+      ],
+      "contradictions": [],
+      "gaps": ["Startup and binary-version races and host scheduling stalls are unrecorded (plan unknown 5).", "Starting the terminal before the session exists over control, or with a fresh --session-id instead of --resume, is unrecorded."],
+      "signals": ["leader:spawned", "leader:exited", "tui:spawn-returned", "tui:exited", "lifecycle:tui-containment", "action:close-requested", "guard:holding", "guard-reason:owner-stopped", "action:tui-signal", "lifecycle:control-close-complete", "connection:control:opened", "connection:control:closing", "connection:control:closed", "connection:guard-upstream:opened", "connection:guard-upstream:closed", "control-sends:initialize"],
+      "samples": {"text-load-repeat": {"1.0.25": {"verified": 2, "refused": 0, "failed": 0}, "1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "process.leader-loss",
+      "question": "What does the owned process layer observe when the native leader dies?",
+      "owner": "process",
+      "ownerDetail": "The owned leader's exit and the guard's hold. They are causes; the uncertainty of any prompt is decided on control (prompt.uncertain).",
+      "expectedOutcome": "On leader loss the guard holds the terminal (upstream-closed), and the app session reports the session lost. What a held terminal would do next is unrecorded. The recorded loss is a controlled SIGKILL of the owned leader, idle or mid-turn.",
+      "evidence": [
+        {"scenario": "leader-loss-idle", "sequence": 280, "signal": "action:owned-leader-signal", "shows": "The owned leader is killed while idle."},
+        {"scenario": "leader-loss-idle", "sequence": 281, "signal": "guard-reason:upstream-closed", "shows": "The guard holds the terminal.", "follows": [{"sequence": 280, "signal": "action:owned-leader-signal"}]},
+        {"scenario": "leader-loss-mid-turn", "sequence": 330, "signal": "action:owned-leader-signal", "shows": "The owned leader is killed mid-turn."},
+        {"scenario": "leader-loss-mid-turn", "sequence": 332, "signal": "guard-reason:upstream-closed", "shows": "The guard holds the terminal.", "follows": [{"sequence": 330, "signal": "action:owned-leader-signal"}]}
+      ],
+      "variants": [],
+      "contradictions": [],
+      "gaps": ["Host process death and host stalls are not recorded; only native engine death is.", "A terminal held by the guard is never observed long: the harness signals the terminal right after the hold."],
+      "signals": ["action:owned-leader-signal", "guard-reason:upstream-closed"],
+      "samples": {"leader-loss-idle": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}, "leader-loss-mid-turn": {"1.0.30": {"verified": 1, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "process.startup-failure",
+      "question": "What happens when native refuses to start?",
+      "owner": "process",
+      "ownerDetail": "The owned leader's exit before control is ready.",
+      "expectedOutcome": "A native that refuses its configuration exits, and no session exists. Recorded: only the leader was started, and it exited absent. Rolling back other resources started before a failure (guard, terminal) is a design obligation of the app session, not a recorded native fact.",
+      "evidence": [
+        {"scenario": "native-startup-failure", "sequence": 5, "signal": "verification:startup-failure-outcome", "shows": "Malformed configuration: the leader exited with code 1 and is absent."}
+      ],
+      "variants": [],
+      "contradictions": [],
+      "gaps": [],
+      "signals": ["verification:startup-failure-outcome"],
+      "samples": {"native-startup-failure": {"1.0.30": {"verified": 3, "refused": 2, "failed": 0}}}
+    },
+    {
+      "id": "process.cleanup-retry",
+      "question": "What happens when cleanup fails part-way?",
+      "owner": "process",
+      "ownerDetail": "Owned identities retained after a failed close. The recorded failure is a controlled fault injected by the harness (stimulus dependent-cleanup-failure), not a native failure.",
+      "expectedOutcome": "A failed close keeps ownership of every live process and the guard's hold, and retrying the helpers' dispose (GrokNativeControl.dispose and GrokTuiSocketGuard.dispose are retryable, like a sibling helper's stop) finishes teardown. No new retry API is introduced.",
+      "evidence": [
+        {"scenario": "cleanup-retry-native", "sequence": 291, "signal": "verification:cleanup-first-attempt", "shows": "The first close failed with the leader alive and the guard holding."},
+        {"scenario": "cleanup-retry-native", "sequence": 304, "signal": "leader:exited", "shows": "The retry completed teardown."}
+      ],
+      "variants": [],
+      "contradictions": [],
+      "gaps": ["A native partial-close failure is unrecorded; only the injected dependent-cleanup fault is.", "In the recorded fault the first close never reached the terminal; a failure after the terminal was signalled is unrecorded."],
+      "signals": ["verification:cleanup-first-attempt"],
+      "samples": {"cleanup-retry-native": {"1.0.30": {"verified": 5, "refused": 0, "failed": 0}}}
+    },
+    {
+      "id": "process.restart-resume",
+      "question": "How is a session resumed after its native processes are replaced?",
+      "owner": "process",
+      "ownerDetail": "A complete new epoch (leader, guard, terminal) loading the same assigned session.",
+      "expectedOutcome": "Resume replaces the whole owned epoch, and nothing from the old epoch mutates the new one. In the only recording: the old leader is gone before the new one starts, the resumed terminal loads the assigned session itself and receives the replay, and control never loads it but re-seeds the MCP set and prompts the session directly. The transcript therefore comes from durable history, not from control replay.",
+      "evidence": [
+        {"scenario": "native-restart-resume", "sequence": 534, "signal": "leader:exited", "shows": "The old leader is gone before the new epoch."},
+        {"scenario": "native-restart-resume", "sequence": 536, "signal": "leader:spawned", "shows": "A new leader starts."},
+        {"scenario": "native-restart-resume", "sequence": 765, "signal": "verification:native-restart-resume", "shows": "Old processes are absent and new ones present. The load and replay flags summarise the resumed TERMINAL's frames, not control."},
+        {"scenario": "native-restart-resume", "sequence": 957, "signal": "stop:end_turn", "shows": "A resumed prompt completes on the new connection."},
+        {"scenario": "native-restart-resume", "sequence": 566, "signal": "tui:spawn-returned", "shows": "The resumed terminal is spawned before any control session request.", "follows": [{"sequence": 536, "signal": "leader:spawned"}]},
+        {"scenario": "native-restart-resume", "sequence": 622, "signal": "tui-sends:session/load", "shows": "The resumed terminal loads the assigned session itself.", "follows": [{"sequence": 566, "signal": "tui:spawn-returned"}]},
+        {"scenario": "native-restart-resume", "sequence": 630, "signal": "sessionUpdate:user_message_chunk", "shows": "The replay goes to the terminal only (through the guard); control receives none.", "follows": [{"sequence": 622, "signal": "tui-sends:session/load"}]},
+        {"scenario": "native-restart-resume", "sequence": 674, "signal": "control-sends:_x.ai/session/update_mcp_servers", "shows": "Control re-seeds the MCP set without loading the session.", "follows": [{"sequence": 630, "signal": "sessionUpdate:user_message_chunk"}]},
+        {"scenario": "native-restart-resume", "sequence": 774, "signal": "prompt-id:native", "shows": "Control prompts the assigned session directly, with no load of its own.", "follows": [{"sequence": 674, "signal": "control-sends:_x.ai/session/update_mcp_servers"}]}
+      ],
+      "variants": [
+        {"scenario": "native-restart-resume", "sequence": 649, "signal": "history:reset", "shows": "The resumed epoch rewrites the transcript, and does so again later."}
+      ],
+      "contradictions": [],
+      "gaps": ["A control session/load in a resumed epoch is unrecorded."],
+      "signals": ["verification:native-restart-resume"],
+      "samples": {"native-restart-resume": {"1.0.30": {"verified": 1, "refused": 5, "failed": 0}}}
+    }
+  ],
+  "harnessSignals": {
+    "lifecycle:capture-start": "Recorder bookkeeping at capture start; not a native observation.",
+    "lifecycle:observation-window-drained": "Recorder bookkeeping at capture end; not a native observation."
+  }
+}

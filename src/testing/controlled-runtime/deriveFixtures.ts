@@ -58,6 +58,18 @@ const registeredScenarios = () => [...scenarios, ...contentScenarios, ...advance
  * never resolve to inherited object members. */
 const own = <T>(record: Readonly<Record<string, T>>, key: string): T | undefined => Object.hasOwn(record, key) ? record[key] : undefined
 
+/** Lookup key for the `id` of a prompt-kind queue entry. WHY a prompt identity and
+ * not the generic `id` family: native lists a waiting prompt under the same id it
+ * later reports as runningPromptId, prompt_complete's promptId and the result's
+ * _meta.promptId. The recorder showed this for client-chosen ids
+ * (client-supplied-prompt-identity adoptedAsQueueEntry, cancel-queued-prompt
+ * queuedEntryUsesClientId). Numbering entry ids apart from prompt ids hid that
+ * equality from the shareable corpus, so acceptance of a waiting prompt, the
+ * earliest acceptance point, could not be read from any timeline (Stage 2
+ * review). The mapping stays value-based: an entry id that differs from every
+ * prompt id still gets its own ordinal, so no equality is invented. */
+const PROMPT_QUEUE_ENTRY_ID_KEY = 'promptQueueEntryId'
+
 /** String identities become `<namespace>-N` per capture. Shared namespaces keep
  * cross-channel identity: the same session in a harness record, a wire frame and
  * an HTTP header maps to the same ordinal. */
@@ -69,6 +81,9 @@ const STRING_IDENTITIES: Record<string, string> = {
   toolCallId: 'tool-call', tool_call_id: 'tool-call', callId: 'tool-call', call_id: 'tool-call', eventId: 'event',
   checkpoint_id: 'checkpoint', subagent_id: 'subagent', attempt_id: 'attempt', agentAddress: 'agent', agentId: 'agent',
   agentInstanceId: 'agent-instance', traceparent: 'trace', id: 'id', task_id: 'task',
+  // Not a native key: the lookup key EvidenceNormalizer.value uses for the `id` of
+  // a prompt-kind `_x.ai/queue/changed` entry (see PROMPT_QUEUE_ENTRY_ID there).
+  [PROMPT_QUEUE_ENTRY_ID_KEY]: 'prompt',
 }
 /** Numeric identities become per-capture ordinals: process ids, and the scripted
  * backend's HTTP request counter, which pairs a request with its chunks, its
@@ -157,10 +172,14 @@ class EvidenceNormalizer {
     if (isRecord(value)) {
       // Object.fromEntries keeps own __proto__-like keys as data; untrusted keys
       // are never assigned onto a normal prototype.
+      // Array items are normalized under their parent key, so a queue entry
+      // object arrives here with key `entries`.
+      const promptQueueEntry = key === 'entries' && value.kind === 'prompt'
       return Object.fromEntries(Object.entries(value).map(([field, item]) => {
         const known = RECORDED_PROTOCOL_KEYS.has(field)
         if (!known && !DATA_KEYED_PARENTS.has(key)) this.unknownKeys++
-        return [known ? field : `field_${this.ordinal('field', field)}`, this.value(item, field, depth + 1)]
+        const lookup = promptQueueEntry && field === 'id' ? PROMPT_QUEUE_ENTRY_ID_KEY : field
+        return [known ? field : `field_${this.ordinal('field', field)}`, this.value(item, lookup, depth + 1)]
       }))
     }
     if (typeof value !== 'string') throw new Error('Controlled-runtime fixture must contain only JSON values')
@@ -309,7 +328,7 @@ function compareVersions(a: string, b: string): number {
 
 export const CORPUS_LIMITS = [
   'Shape evidence only: prompts, replies, tool arguments and results, commands, paths, errors and other free text become per-timeline `[text N]` placeholders that keep equality within one timeline.',
-  'Identities (sessions, prompts, connections, HTTP and JSON-RPC requests, tokens, tool calls, events, process ids) become per-timeline ordinals that keep cross-channel equality. String JSON-RPC ids share one `id-N` numbering with other string ids (auth methods, config options, todos), so a kept enum value such as a default auth method id is not matched to them.',
+  'Identities (sessions, prompts, connections, HTTP and JSON-RPC requests, tokens, tool calls, events, process ids) become per-timeline ordinals that keep cross-channel equality. String JSON-RPC ids share one `id-N` numbering with other string ids (auth methods, config options, todos), so a kept enum value such as a default auth method id is not matched to them. The id of a prompt-kind queue entry is numbered with prompt ids instead, so a waiting prompt and the same prompt running or completed share one `prompt-N`.',
   'chat_history rows use the separately reviewed transcript normalizer: their text placeholders, tool-call ids, tool names and prompt_index values are numbered independently, restarting per session, and do not match timeline identities. Its image carriers are placeholders too: inline data URLs keep their MIME type but decode to "fixture image N" instead of image bytes, other image URLs become fixture.invalid placeholder URLs, and its text equality ignores surrounding whitespace.',
   'History byte offsets are ranks within one (session, file, generation): order and equality hold there and 0 stays 0, but byte counts do not.',
   'Protocol counters (indices, geometry, codes, pagination, numeric ids) keep their values wherever they appear; every other number keeps only its sign and whether it is an integer, so comparisons such as token counts before and after compaction are not possible.',

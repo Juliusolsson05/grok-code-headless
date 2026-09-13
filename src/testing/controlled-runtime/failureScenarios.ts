@@ -220,8 +220,9 @@ export const failureScenarios: CaptureScenario[] = [
       const completions = context.notifications.filter(event => event.method === '_x.ai/session/prompt_complete').map(event => event.params as any)
       context.capture.record('verification', 'client-prompt-identity', {
         // Earliest acceptance point: the waiting entry native lists before the
-        // prompt runs. The public corpus numbers queue entry ids and prompt ids in
-        // separate ordinal families, so only this boolean carries the comparison.
+        // prompt runs. The boolean is computed from the exact capture; the public
+        // corpus numbers prompt-kind entry ids with prompt ids, so the same
+        // equality is also readable there.
         adoptedAsQueueEntry: queueChanges.some(params => (params?.entries ?? []).some((entry: any) => entry?.id === promptId)),
         adoptedAsRunning: queueChanges.some(params => params?.runningPromptId === promptId),
         adoptedAsCompleted: completions.some(params => params?.promptId === promptId),
