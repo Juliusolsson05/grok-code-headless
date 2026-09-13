@@ -51,6 +51,31 @@ function identity(value: any, socket: Socket, pid = 123) {
 }
 
 describe('native leader transport', () => {
+  it('observes actual wire bytes without letting a recorder mutate or abort transport', async () => {
+    const observations: Array<{ kind: string; bytes?: Buffer; writeId?: number }> = []
+    let nativeReply = Buffer.alloc(0)
+    const path = await peer((value, socket) => {
+      if (value.type === 'register') register(socket)
+      else if (value.type === 'control') identity(value, socket)
+      else if (value.type === 'acp') {
+        const request = JSON.parse(value.payload)
+        nativeReply = frame({ type: 'acp', payload: JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { text: request.params.text } }) })
+        socket.write(nativeReply)
+      }
+    })
+    connection = await GrokLeaderConnection.connect(path, 123, { onTransportObservation: event => {
+      observations.push({ kind: event.kind, bytes: event.bytes ? Buffer.from(event.bytes) : undefined, writeId: event.writeId })
+      event.bytes?.fill(0)
+      throw new Error('controlled observer failure')
+    } })
+    await expect(connection.rpc.request('fixture', { text: 'é\n\tunchanged' })).resolves.toEqual({ text: 'é\n\tunchanged' })
+    const received = Buffer.concat(observations.filter(event => event.kind === 'received').map(event => event.bytes!))
+    expect(received.subarray(-nativeReply.length)).toEqual(nativeReply)
+    expect(observations.some(event => event.kind === 'write-attempt' && event.bytes)).toBe(true)
+    expect(observations.some(event => event.kind === 'write-complete' && event.writeId !== undefined)).toBe(true)
+    connection.close()
+    await expect.poll(() => observations.at(-1)?.kind).toBe('closed')
+  })
   it('verifies registration/owned PID and routes RPC through the native length-framed envelope', async () => {
     const path = await peer((value, socket) => {
       if (value.type === 'register') { expect(value.mode).toBe('stdio'); register(socket) }

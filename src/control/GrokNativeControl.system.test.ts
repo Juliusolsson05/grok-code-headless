@@ -19,6 +19,17 @@ async function expectCleaned() {
   await expect(stat(dirname(owned.socketPath))).rejects.toMatchObject({ code: 'ENOENT' })
 }
 describe('owned Grok native control lifetime', () => {
+  it('observes real child spawn and exit without handing lifecycle ownership to the observer', async () => {
+    const events: Array<{ kind: string; pid?: number; exitCode?: number | null }> = []
+    control = await GrokNativeControl.start({ ...options(), onLifecycleObservation: event => {
+      events.push({ ...event })
+      throw new Error('controlled recorder failure')
+    } })
+    const pid = control.pid
+    await control.dispose()
+    expect(events[0]).toMatchObject({ kind: 'spawned', pid })
+    expect(events.at(-1)).toMatchObject({ kind: 'exited', pid })
+  })
   it('starts a private verified leader, carries literal prompt text and cleans its own socket directory', async () => {
     control = await GrokNativeControl.start(options())
     const directory = dirname(control.socketPath)

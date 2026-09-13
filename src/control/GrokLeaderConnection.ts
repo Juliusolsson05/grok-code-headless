@@ -3,8 +3,9 @@ import { PassThrough, Writable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
 import { GrokAcpClient, GrokAcpError, type GrokAcpClientOptions } from './GrokAcpClient.js'
 import { validateDeadlineMs } from './deadline.js'
+import { observeTransport, type GrokTransportObserver } from './transportObservation.js'
 
-export interface GrokLeaderConnectionOptions extends GrokAcpClientOptions { connectTimeoutMs?: number; signal?: AbortSignal }
+export interface GrokLeaderConnectionOptions extends GrokAcpClientOptions { connectTimeoutMs?: number; signal?: AbortSignal; onTransportObservation?: GrokTransportObserver }
 
 // Native leader protocol v1: 4-byte big-endian length + JSON envelope. ACP is
 // a string payload inside that envelope. Keep this adapter separate from RPC
@@ -19,6 +20,8 @@ export class GrokLeaderConnection {
   private verified = false
   private initialized = false
   private readonly controlId = randomUUID()
+  private readonly connectionId = randomUUID()
+  private writeId = 0
   private readonly maxFrame: number
   private readonly header = Buffer.alloc(4)
   private headerBytes = 0
@@ -56,18 +59,28 @@ export class GrokLeaderConnection {
     this.timer = setTimeout(() => this.fail(new Error('Grok leader registration timed out')), options.connectTimeoutMs ?? 10000)
     options.signal?.addEventListener('abort', this.abort, { once: true })
     this.socket.on('error', () => this.fail(new Error('Grok leader connection failed')))
-    this.socket.on('close', () => this.fail(new Error('Grok leader connection closed')))
+    this.socket.on('close', () => {
+      observeTransport(options.onTransportObservation, { role: 'control', connectionId: this.connectionId, kind: 'closed' })
+      this.fail(new Error('Grok leader connection closed'))
+    })
     this.socket.on('end', () => this.fail(new Error('Grok leader connection ended')))
-    this.socket.on('data', data => this.consume(data))
-    this.socket.once('connect', () => this.send({
+    this.socket.on('data', data => {
+      observeTransport(options.onTransportObservation, { role: 'control', connectionId: this.connectionId, kind: 'received' }, data)
+      this.consume(data)
+    })
+    this.socket.once('connect', () => {
+      observeTransport(options.onTransportObservation, { role: 'control', connectionId: this.connectionId, kind: 'opened' })
+      this.send({
       type: 'register', client_type: 'grok-code-headless', mode: 'stdio',
       capabilities: { yolo_mode: false, auto_mode: false, terminal: false, fs_read: false, fs_write: false, user_message_echo: true },
-    }))
+      })
+    })
     this.incoming.on('drain', () => this.socket.resume())
   }
   close(): void {
     if (this.closed) return
     this.closed = true
+    observeTransport(this.options.onTransportObservation, { role: 'control', connectionId: this.connectionId, kind: 'closing' })
     clearTimeout(this.timer)
     this.options.signal?.removeEventListener('abort', this.abort)
     this.rejectReady(new Error('Grok leader connection closed'))
@@ -85,7 +98,11 @@ export class GrokLeaderConnection {
     const payload = Buffer.from(JSON.stringify(value))
     if (payload.length > this.maxFrame) { callback?.(new GrokAcpError('capacity', false)); this.fail(new Error('Leader frame exceeds limit')); return }
     const header = Buffer.alloc(4); header.writeUInt32BE(payload.length)
-    this.socket.write(Buffer.concat([header, payload]), error => {
+    const packet = Buffer.concat([header, payload])
+    const writeId = ++this.writeId
+    observeTransport(this.options.onTransportObservation, { role: 'control', connectionId: this.connectionId, kind: 'write-attempt', writeId }, packet)
+    this.socket.write(packet, error => {
+      observeTransport(this.options.onTransportObservation, { role: 'control', connectionId: this.connectionId, kind: error ? 'write-error' : 'write-complete', writeId })
       callback?.(error)
       if (error) this.fail(new Error('Grok leader write failed'))
     })

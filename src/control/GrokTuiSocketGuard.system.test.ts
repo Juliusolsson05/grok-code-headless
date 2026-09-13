@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { once } from 'node:events'
 import { afterEach, expect, it, vi } from 'vitest'
 import { GrokTuiSocketGuard, type GrokTuiGuardFault } from './GrokTuiSocketGuard.js'
+import type { GrokTransportObserver, GrokTransportObservation } from './transportObservation.js'
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
@@ -51,7 +52,7 @@ function collect(socket: Socket, receive: (value: any, bytes: Buffer) => void) {
   })
 }
 async function fixture(options: { pid?: number; silent?: boolean; maxFrameBytes?: number; maxQueuedBytes?: number; maxPendingFrames?: number;
-  registration?: Record<string, unknown>; rawRegistration?: string; holdIdentity?: boolean; skipReady?: boolean } = {}) {
+  registration?: Record<string, unknown>; rawRegistration?: string; holdIdentity?: boolean; skipReady?: boolean; observer?: GrokTransportObserver } = {}) {
   root = await mkdtemp(join(tmpdir(), 'g-guard-test-'))
   let upstream: Socket | undefined
   let connects = 0
@@ -71,7 +72,7 @@ async function fixture(options: { pid?: number; silent?: boolean; maxFrameBytes?
   const faults: GrokTuiGuardFault[] = []
   guard = await GrokTuiSocketGuard.create({ upstreamPath: path, expectedPid: 123, onFault: reason => faults.push(reason),
     registrationTimeoutMs: options.silent ? 50 : 2000, maxFrameBytes: options.maxFrameBytes, maxQueuedBytes: options.maxQueuedBytes,
-    maxPendingFrames: options.maxPendingFrames })
+    maxPendingFrames: options.maxPendingFrames, onTransportObservation: options.observer })
   client = createConnection(guard.socketPath)
   const output: Buffer[] = []
   let ended = false
@@ -92,6 +93,22 @@ it('verifies the owned upstream PID before forwarding registration, preserving h
   expect(f.output[1]).toEqual(nativeBytes)
   client!.write(nativeBytes)
   await expect.poll(() => f.input.at(-1)).toEqual(nativeBytes)
+})
+
+it('records received TUI bytes even after holding, without granting observers write authority', async () => {
+  const events: GrokTransportObservation[] = []
+  const f = await fixture({ observer: event => {
+    events.push({ ...event, bytes: event.bytes ? Buffer.from(event.bytes) : undefined })
+    event.bytes?.fill(0)
+    throw new Error('controlled observer failure')
+  } })
+  expect(f.output).toEqual([frame(registration)])
+  guard!.hold()
+  const bytes = frame({ type: 'ping' })
+  client!.write(bytes)
+  await expect.poll(() => events.some(event => event.role === 'tui' && event.kind === 'received' && Buffer.from(event.bytes ?? []).equals(bytes))).toBe(true)
+  expect(events.some(event => event.role === 'guard-upstream' && event.kind === 'received')).toBe(true)
+  expect(guard!.state).toBe('holding')
 })
 
 it('suppresses fragmented shutdown and all trailing traffic while retaining the downstream connection', async () => {

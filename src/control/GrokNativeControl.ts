@@ -8,13 +8,18 @@ import { GrokLeaderConnection } from './GrokLeaderConnection.js'
 import { validateGrokSessionId } from '../transcript/SessionDirEncoding.js'
 import { validateDeadlineMs } from './deadline.js'
 import { retireResolvedInteraction } from './GrokInteractions.js'
+import type { GrokTransportObserver } from './transportObservation.js'
 export type GrokMcpServer = { type: 'http'; name: string; url: string; headers: Array<{ name: string; value: string }> }
+export type GrokControlLifecycleObservation = { kind: 'spawned' | 'exited' | 'process-error'; pid?: number; exitCode?: number | null; signal?: NodeJS.Signals | null }
 export interface GrokNativeControlOptions extends GrokAcpClientOptions {
   cwd: string; binary?: string; env?: NodeJS.ProcessEnv; model?: string; startupTimeoutMs?: number
   /** Startup cancellation only; use dispose() after start has returned. */
   signal?: AbortSignal
   /** False supplies only env, so isolated native probes cannot inherit host auth/config overrides. */
   inheritEnv?: boolean
+  onTransportObservation?: GrokTransportObserver
+  /** Diagnostic/capture only; onClose/dispose remain the public lifecycle contract. */
+  onLifecycleObservation?: (event: GrokControlLifecycleObservation) => void
   /** Must acknowledge dependent TUI exit. RPC is already closed; this hook owns process cleanup only. */
   beforeClose?: () => Promise<void>
   relayUrl?: string; relayOrigin?: string
@@ -79,11 +84,14 @@ export class GrokNativeControl {
       // and descendants cannot hold a parent-owned stderr pipe open past exit.
       cwd: this.options.cwd, env, stdio: 'ignore',
     })
+    this.child.once('spawn', () => this.observeLifecycle({ kind: 'spawned', pid: this.child?.pid }))
     this.child.on('error', () => {
+      this.observeLifecycle({ kind: 'process-error', pid: this.child?.pid })
       if (!this.child?.pid) { this.exitObserved = true; this.resolveExit() }
       this.abort.abort()
     })
-    this.child.once('exit', () => {
+    this.child.once('exit', (exitCode, signal) => {
+      this.observeLifecycle({ kind: 'exited', pid: this.child?.pid, exitCode, signal })
       this.exitObserved = true; this.resolveExit(); this.abort.abort()
       this.connection?.close()
       void this.dispose().catch(() => { /* explicit dispose caller receives the same promise */ })
@@ -122,6 +130,9 @@ export class GrokNativeControl {
     }
     if (this.options.signal?.aborted) throw new GrokAcpError('aborted', false)
     throw new Error('Grok native control startup failed')
+  }
+  private observeLifecycle(event: GrokControlLifecycleObservation): void {
+    try { this.options.onLifecycleObservation?.(event) } catch { /* observer does not own shutdown */ }
   }
   async createSession(id: string, servers: GrokMcpServer[]): Promise<string> {
     validateGrokSessionId(id)

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { validateDeadlineMs } from './deadline.js'
 import { parseLeaderEnvelope as envelope, validLeaderRegistration, validLeaderControlResult } from './GrokLeaderEnvelope.js'
+import { observeTransport, type GrokTransportObserver, type GrokTransportObservation } from './transportObservation.js'
 
 export type GrokTuiGuardFault = 'owner-stopped' | 'upstream-closed' | 'protocol' | 'capacity' | 'identity' | 'registration-timeout' | 'extra-client'
 export interface GrokTuiSocketGuardOptions {
@@ -15,6 +16,7 @@ export interface GrokTuiSocketGuardOptions {
   maxFrameBytes?: number
   maxQueuedBytes?: number
   maxPendingFrames?: number
+  onTransportObservation?: GrokTransportObserver
 }
 export class GrokTuiSocketGuard {
   readonly socketPath: string
@@ -22,6 +24,8 @@ export class GrokTuiSocketGuard {
   private readonly server: Server
   private readonly clients = new Set<Socket>()
   private acceptedConnections = 0
+  private readonly socketIdentities = new WeakMap<Socket, { role: 'tui' | 'guard-upstream'; connectionId: string }>()
+  private writeId = 0
   private upstream: Socket | undefined
   private downstream: Socket | undefined
   private readers: LeaderFrames[] = []
@@ -112,27 +116,32 @@ export class GrokTuiSocketGuard {
   }
   private accept(socket: Socket): void {
     this.acceptedConnections++
+    this.socketIdentities.set(socket, { role: 'tui', connectionId: randomUUID() })
+    this.observe(socket, 'opened')
+    socket.on('close', () => this.observe(socket, 'closed'))
     if (this.released) { socket.destroy(); return }
     this.clients.add(socket)
     socket.on('error', () => this.hold('owner-stopped'))
     socket.on('end', () => this.hold('owner-stopped'))
     socket.on('close', () => { this.clients.delete(socket); this.hold('owner-stopped') })
     if (this.downstream || this.phase !== 'waiting') {
-      socket.on('data', () => { /* drain without buffering/replaying */ })
+      socket.on('data', bytes => this.observe(socket, 'received', bytes))
       this.hold('extra-client')
       return
     }
     this.downstream = socket
     const upstream = createConnection(this.options.upstreamPath)
     this.upstream = upstream
+    this.socketIdentities.set(upstream, { role: 'guard-upstream', connectionId: randomUUID() })
+    upstream.on('connect', () => this.observe(upstream, 'opened'))
     upstream.on('error', () => this.hold('upstream-closed'))
     upstream.on('end', () => this.hold('upstream-closed'))
-    upstream.on('close', () => this.hold('upstream-closed'))
+    upstream.on('close', () => { this.observe(upstream, 'closed'); this.hold('upstream-closed') })
     const input = new LeaderFrames(this.maxFrame, bytes => this.fromTui(bytes))
     const output = new LeaderFrames(this.maxFrame, bytes => this.fromLeader(bytes))
     this.readers.push(input, output)
-    socket.on('data', bytes => { try { input.write(bytes) } catch { this.hold('protocol') } })
-    upstream.on('data', bytes => { try { output.write(bytes) } catch { this.hold('protocol') } })
+    socket.on('data', bytes => { this.observe(socket, 'received', bytes); try { input.write(bytes) } catch { this.hold('protocol') } })
+    upstream.on('data', bytes => { this.observe(upstream, 'received', bytes); try { output.write(bytes) } catch { this.hold('protocol') } })
     this.timer = setTimeout(() => this.hold('registration-timeout'), this.options.registrationTimeoutMs ?? 2000)
   }
   private fromTui(bytes: Buffer): void {
@@ -199,10 +208,17 @@ export class GrokTuiSocketGuard {
     this.queuedBytes += bytes.length; this.queuedFrames++
     // Count pending write receipts in both directions. Never allow a stalled
     // native peer to turn forwarding into an unbounded replay queue.
+    const writeId = ++this.writeId
+    this.observe(socket, 'write-attempt', bytes, writeId)
     socket.write(bytes, error => {
+      this.observe(socket, error ? 'write-error' : 'write-complete', undefined, writeId)
       this.queuedBytes -= bytes.length; this.queuedFrames--
       if (error) this.hold('upstream-closed')
     })
+  }
+  private observe(socket: Socket, kind: GrokTransportObservation['kind'], bytes?: Buffer, writeId?: number) {
+    const identity = this.socketIdentities.get(socket)
+    if (identity) observeTransport(this.options.onTransportObservation, { ...identity, kind, writeId }, bytes)
   }
   private hasCapacity(bytes: Buffer): boolean {
     const held = this.earlyBytes + (this.registered?.length ?? 0) + (this.readyMarker?.length ?? 0)
