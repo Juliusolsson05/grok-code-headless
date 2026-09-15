@@ -7,6 +7,9 @@ import { validateDeadlineMs } from './deadline.js'
 import { parseLeaderEnvelope as envelope, validLeaderRegistration, validLeaderControlResult } from './GrokLeaderEnvelope.js'
 import { observeTransport, type GrokTransportObserver, type GrokTransportObservation } from './transportObservation.js'
 
+/** A terminal-side ACP envelope, decoded to its inner JSON-RPC payload. */
+export type GrokTerminalMessage = { direction: 'from-terminal' | 'to-terminal'; payload: string; connectionId: string }
+
 export type GrokTuiGuardFault = 'owner-stopped' | 'upstream-closed' | 'protocol' | 'capacity' | 'identity' | 'registration-timeout' | 'extra-client'
 export interface GrokTuiSocketGuardOptions {
   upstreamPath: string
@@ -216,9 +219,37 @@ export class GrokTuiSocketGuard {
       if (error) this.hold('upstream-closed')
     })
   }
+  private readonly terminalListeners = new Set<(message: GrokTerminalMessage) => void>()
+
+  /** The terminal's own ACP traffic, decoded, for GrokHeadless's terminal
+   * detection (its session/load, session/new and native's answers). Diagnostic
+   * seam like the transport observation: a listener cannot alter bytes or
+   * acquire lifecycle authority by throwing. */
+  observeTerminalMessages(listener: (message: GrokTerminalMessage) => void): () => void {
+    this.terminalListeners.add(listener)
+    return () => { this.terminalListeners.delete(listener) }
+  }
+
+  private notifyTerminal(kind: GrokTransportObservation['kind'], bytes: Buffer): void {
+    if (this.terminalListeners.size === 0) return
+    // Only ACP envelopes carry the terminal's own JSON-RPC; registration, ping
+    // and control frames name nothing the consumer reads. Which terminal socket
+    // sent them is kept for diagnostics; there is one expected terminal.
+    try {
+      const value = envelope(bytes)
+      if (value.type !== 'acp' || typeof value.payload !== 'string') return
+      const direction = kind === 'received' ? 'from-terminal' : kind === 'write-attempt' ? 'to-terminal' : null
+      if (!direction) return
+      for (const listener of [...this.terminalListeners]) {
+        try { listener({ direction, payload: value.payload, connectionId: 'terminal' }) } catch { /* listener cannot change forwarding */ }
+      }
+    } catch { /* an undecodable observation names nothing */ }
+  }
+
   private observe(socket: Socket, kind: GrokTransportObservation['kind'], bytes?: Buffer, writeId?: number) {
     const identity = this.socketIdentities.get(socket)
     if (identity) observeTransport(this.options.onTransportObservation, { ...identity, kind, writeId }, bytes)
+    if (identity && identity.role === 'tui' && bytes) this.notifyTerminal(kind, bytes)
   }
   private hasCapacity(bytes: Buffer): boolean {
     const held = this.earlyBytes + (this.registered?.length ?? 0) + (this.readyMarker?.length ?? 0)

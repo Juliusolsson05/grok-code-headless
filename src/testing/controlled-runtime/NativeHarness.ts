@@ -427,7 +427,7 @@ function captureMetadata(scenario: { id: string; description: string; targets: s
     timingValidity: 'synchronous fsync recording perturbs timing; do not use capture intervals as latency or race-frequency evidence' }
 }
 
-function isolatedEnv(directory: string, home: string, base: string): NodeJS.ProcessEnv {
+export function isolatedEnv(directory: string, home: string, base: string): NodeJS.ProcessEnv {
   return { PATH: process.env.PATH, HOME: directory, USER: 'fixture', LOGNAME: 'fixture', GROK_HOME: home,
     XDG_CONFIG_HOME: join(directory, 'config'), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
     XAI_API_KEY: 'fixture-only-not-a-real-key', GROK_MODELS_BASE_URL: `${base}/v1`, GROK_XAI_API_BASE_URL: `${base}/v1`,

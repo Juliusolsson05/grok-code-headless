@@ -1,12 +1,16 @@
-// grok-code-headless — programmatic control of Grok Build via headless terminal.
+// grok-code-headless — native Grok Build, read the way Agent Code reads every
+// provider.
 //
-// Mirrors claude-code-headless / codex-headless API surface where possible.
-// Provider-specific halves (screen parser, session storage under
-// ~/.grok/sessions/<encoded resolved cwd>, updates.jsonl/tool lifecycle,
-// cli-chat-proxy relay) land with Tasks 2-6 of the grok provider plan.
+// The package mirrors claude-code-headless, codex-headless and
+// opencode-terminal-headless one-to-one: the consumer spawns every process
+// (the terminal PTY from `prepareGrokTerminalLaunch`, the owned leader
+// `GrokNativeControl`, the terminal socket guard `GrokTuiSocketGuard`), and
+// `GrokHeadless` only observes and uses them. The evidence and ownership rules
+// behind the surface are testing/fixtures/controlled-runtime/catalog.json and
+// contract.md.
 export { GROK_HEADLESS_VERSION } from './grokVersion.js'
 
-// --- Transcript codec (Task 2) ---
+// --- Transcript codec ---
 export {
   GROK_CONVERSATION_ITEM_TYPES,
   GrokConversationItemDecodeError,
@@ -37,7 +41,7 @@ export {
   writeGrokChatHistory,
 } from './transcript/GrokJsonl.js'
 
-// --- Session discovery (Task 3) ---
+// --- Session discovery ---
 export { encodeGrokSessionsDir, getGrokSessionsRoot } from './transcript/SessionDirEncoding.js'
 export { parseGrokSummary } from './transcript/SummaryJson.js'
 export type { GrokSessionSummary, GrokSummaryInfo } from './transcript/SummaryJson.js'
@@ -47,44 +51,53 @@ export {
   resolveGrokTranscriptPath,
 } from './transcript/SessionList.js'
 export type { GrokSessionListEntry } from './transcript/SessionList.js'
-
-// --- Headless session core (Task 4) ---
-export { GrokHeadless } from './GrokHeadless.js'
-export type {
-  GrokHeadlessOptions,
-  GrokHeadlessCreateOptions,
-  GrokHeadlessEvents,
-  GrokScreenEvent,
-  GrokEntryEvent,
-  GrokHistoryEvent,
-  GrokUpdateEvent,
-  GrokSessionEvent,
-  GrokExitEvent,
-  GrokActivityEvent,
-  GrokIdleEvent,
-} from './GrokHeadless.js'
-export { HeadlessTerminal } from './terminal/HeadlessTerminal.js'
-export type {
-  HeadlessTerminalOptions,
-  HeadlessTerminalEvents,
-  ScreenSnapshot,
-  StableTerminalFrame,
-  StableTerminalRow,
-} from './terminal/HeadlessTerminal.js'
 export { FileTailer, RolloutGenerationMismatchError } from './transcript/JsonlTailer.js'
 export type { FileTailerOptions, FileTailerEntryMetadata, FileTailerSnapshotEvent } from './transcript/JsonlTailer.js'
+export type { GrokDurableEntry, GrokHistoryBoundary } from './transcript/durable.js'
 
-// Standalone provider observation/capture; no Agent Code or renderer imports.
-export { GrokResponsesProxy } from './proxy/GrokResponsesProxy.js'
-export type { GrokResponsesProxyOptions } from './proxy/GrokResponsesProxy.js'
-export { GrokResponseObserver } from './proxy/GrokResponseObserver.js'
-export type { GrokStreamEvent } from './proxy/GrokResponseObserver.js'
-export { ResponseCapture, replayResponseCapture } from './recording/ResponseCapture.js'
-export type { GrokCommandPermission, GrokCommandPermissionState, GrokPermissionChoice } from './conditions/commandPermission.js'
+// --- Root class ---
+export { GrokHeadless } from './GrokHeadless.js'
+export type {
+  ConditionActionResult,
+  GrokControlHandle,
+  GrokGuardHandle,
+  GrokHeadlessEvents,
+  GrokHeadlessOptions,
+  GrokTerminalError,
+  SubmitPromptResult,
+} from './GrokHeadless.js'
 
-// Owned ACP control is a separate lifetime from the legacy paste-driven PTY.
-// A host must prove the TUI shares this identity before exposing pane actions.
+// --- Launch: prepared values only, nothing started ---
+export { prepareGrokTerminalLaunch } from './launch/prepareLaunch.js'
+export type { GrokTerminalLaunch, PrepareGrokTerminalLaunchOptions } from './launch/prepareLaunch.js'
+export type { PtyDisposable, PtyExitEvent, PtyLike } from './terminal/PtyBinding.js'
+
+// --- App-started helpers: the consumer starts, holds and disposes them ---
 export { GrokNativeControl } from './control/GrokNativeControl.js'
-export type { GrokNativeControlOptions, GrokMcpServer } from './control/GrokNativeControl.js'
+export type { GrokControlObserver, GrokMcpServer, GrokNativeControlOptions } from './control/GrokNativeControl.js'
+export { GrokTuiSocketGuard } from './control/GrokTuiSocketGuard.js'
+export type { GrokTerminalMessage, GrokTuiGuardFault, GrokTuiSocketGuardOptions } from './control/GrokTuiSocketGuard.js'
 export { GrokAcpError } from './control/GrokAcpClient.js'
 export type { GrokAcpClientOptions, GrokAcpRequestOptions, GrokAcpServerRequest } from './control/GrokAcpClient.js'
+
+// --- Conditions: kinds, action names and state shapes Agent Code renders ---
+export { GROK_MODULES, PERMISSION_REPLY_ACTION, PLAN_REPLY_ACTION, QUESTION_CANCEL_ACTION } from './conditions/modules.js'
+export type {
+  GrokConditionInputs,
+  GrokPermissionConditionState,
+  GrokPlanApprovalConditionState,
+  GrokQuestionConditionState,
+} from './conditions/modules.js'
+export type { ConditionAction, ConditionCustomAction, ConditionRecord, ConditionSnapshot } from './conditions/core/contract.js'
+
+// --- Channels, in the siblings' shape ---
+export { CommittedChannel, ScreenChannel, SemanticChannel } from './channels/channels.js'
+export type {
+  CommittedEvent,
+  GrokActivity,
+  ScreenEvent,
+  SemanticEvent,
+  SemanticTurnCompletedEvent,
+  SemanticTurnStartedEvent,
+} from './channels/types.js'
+export type { PendingPermission, PendingPlanApproval, PendingQuestion, PendingRequests, StreamPhase } from './live/types.js'

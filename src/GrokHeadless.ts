@@ -1,422 +1,562 @@
-// Owns one native TUI process and its two durable observation channels.
-// The process receives its UUID before spawn: directory order, prompt text,
-// and "newest file" cannot establish ownership when agents share a cwd.
-// See xai-grok-pager/src/app/cli.rs: --session-id names a fresh TUI session.
+// GrokHeadless — the native Grok Build terminal, read the way Agent Code reads
+// every provider.
+//
+// The app session starts the owned leader (GrokNativeControl), creates or resumes
+// the session over it, starts the terminal socket guard (GrokTuiSocketGuard),
+// prepares the launch, spawns the terminal PTY with the prepared arguments, and
+// passes the PTY and both handles in. This class never spawns, kills or disposes a
+// process, exactly like claude-code-headless, codex-headless and
+// opencode-terminal-headless. It composes:
+//
+//   live/        control transitions: turns, acceptance, activity, requests
+//   transcript/  durable channel: chat_history.jsonl entries and generations
+//   reconcile/   the one place both meet (answer-before-completion ordering)
+//   conditions/  shared conditions core → Agent Code's condition snapshot
+//   channels/    semantic / screen / committed, the siblings' shape
+//
+// Every rule it applies is a Stage 2 catalog fact (testing/fixtures/
+// controlled-runtime/catalog.json; contract.md explains the shape). Two are worth
+// restating here because they decide the public surface:
+// - A submitted prompt resolves on native ACCEPTANCE, the first queue
+//   notification naming its client-chosen id, never on the write
+//   (prompt.acceptance, prompt.write). A prompt that may have reached native is
+//   never resent (decision uncertain-prompts).
+// - The terminal moving to another conversation is detected from the terminal's
+//   own requests and reported as `session-switched`. Fencing input is the app
+//   session's job (decision terminal-conversation-change).
+//
+// Degradation is explicit, never silent:
+// - An unreadable history file or entry → `transcript-error`; control keeps working.
+// - A closed control connection → `live-state { connected: false }`, open turns
+//   end uncertain and written submissions settle uncertain.
+// - Native refusing the terminal's load → `terminal-load-refused`.
+// - Native refusing a prompt it already accepted → a semantic `api_error`.
+
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { createRequire } from 'node:module'
-import type { IPty, IDisposable } from 'node-pty'
-import { HeadlessTerminal, type ScreenSnapshot } from './terminal/HeadlessTerminal.js'
-import { FileTailer, type FileTailerSnapshotEvent } from './transcript/JsonlTailer.js'
-import { encodeGrokSessionsDir, validateGrokSessionId } from './transcript/SessionDirEncoding.js'
-import { decodeGrokConversationItem, type GrokConversationItem } from './transcript/ConversationItem.js'
-import { GrokResponsesProxy, type GrokResponsesProxyOptions } from './proxy/GrokResponsesProxy.js'
-import type { GrokStreamEvent } from './proxy/GrokResponseObserver.js'
-import { detectCommandPermission, type GrokCommandPermission, type GrokCommandPermissionState, type GrokPermissionChoice } from './conditions/commandPermission.js'
 
-const require = createRequire(import.meta.url)
+import { CommittedChannel, ScreenChannel, SemanticChannel } from './channels/channels.js'
+import type { GrokActivity, SemanticEvent } from './channels/types.js'
+import type { ConditionCustomAction, ConditionSnapshot } from './conditions/core/contract.js'
+import { makeEvaluator } from './conditions/core/evaluator.js'
+import { GROK_MODULES, PERMISSION_CANCEL_ACTION, PERMISSION_REPLY_ACTION, PLAN_REPLY_ACTION, QUESTION_CANCEL_ACTION, type GrokConditionInputs } from './conditions/modules.js'
+import type { GrokAcpServerRequest } from './control/GrokAcpClient.js'
+import type { GrokTerminalLaunch } from './launch/prepareLaunch.js'
+import { ControlStateProjector } from './live/ControlStateProjector.js'
+import type { ControlInput, LiveOutput } from './live/types.js'
+import { SessionSequencer } from './reconcile/SessionSequencer.js'
+import { PtyBinding, type PtyLike } from './terminal/PtyBinding.js'
+import type { GrokDurableEntry, GrokHistoryBoundary } from './transcript/durable.js'
+import { HistoryReader } from './transcript/HistoryReader.js'
+import { validateGrokSessionId } from './transcript/SessionDirEncoding.js'
+import { resolveGrokTranscriptPath } from './transcript/SessionList.js'
 
-export interface GrokUpdateEvent {
-  timestamp: number
-  method: string
-  params: {
-    sessionId: string
-    update: { sessionUpdate: string; [key: string]: unknown }
-    [key: string]: unknown
+/** The app-owned control helper, structurally: GrokNativeControl satisfies it. */
+export type GrokControlHandle = {
+  readonly isClosed: boolean
+  /** Throws once the control lifetime is closed. */
+  readonly rpc: {
+    request(method: string, params: unknown, options?: { timeoutMs?: number | null }): Promise<unknown>
+    notify(method: string, params: unknown): Promise<void>
+    respond(token: string, result: unknown): Promise<void>
   }
-  [key: string]: unknown
+  /** Tells an observer attached after the connection closed about the close at once. */
+  observe(observer: {
+    onNotification?: (value: { method: string; params?: unknown }) => void
+    onRequest?: (value: GrokAcpServerRequest) => void
+    onClose?: () => void
+  }): () => void
 }
+
+/** The app-owned terminal socket guard, structurally: GrokTuiSocketGuard satisfies it. */
+export type GrokGuardHandle = {
+  observeTerminalMessages(listener: (message: { direction: 'from-terminal' | 'to-terminal'; payload: string }) => void): () => void
+}
+
 export type GrokHeadlessOptions = {
+  /** The terminal PTY the app spawned from `launch`. Never killed here. */
+  pty: PtyLike
   cwd: string
-  grokBinary?: string
-  cols?: number
-  rows?: number
-  /** Explicit test/consumer home; otherwise honor the caller's GROK_HOME. */
+  launch: GrokTerminalLaunch
+  control: GrokControlHandle
+  guard: GrokGuardHandle
+  /**
+   * The conversation existed before this pane (the app resumed it). Its first
+   * history generation is then a rewrite snapshot of an existing conversation
+   * (history.replacement, process.restart-resume).
+   */
+  resume?: boolean
+  /**
+   * Sessions home. Defaults to the launch environment's GROK_HOME, where the
+   * terminal this pane observes writes, then the host's GROK_HOME or ~/.grok.
+   * Reading another home than the terminal's would wait forever for a file.
+   */
   grokHome?: string
-  /** Caller owns relay readiness and cache safety; this class only routes. */
-  proxyUrl?: string
-  modelsListUrl?: string
-  resumeSessionId?: string
-  extraArgs?: string[]
-  env?: Record<string, string | undefined>
+  now?: () => number
+  heartbeatMs?: number
+  settleDeadlineMs?: number
+  /**
+   * How long a submission waits for native acceptance before reporting
+   * `unconfirmed` (prompt.acceptance). It changes only what is reported: the
+   * prompt is never resent (decision uncertain-prompts).
+   */
+  acceptanceTimeoutMs?: number
 }
-export type GrokHeadlessCreateOptions = Omit<GrokHeadlessOptions, 'proxyUrl' | 'modelsListUrl'> & {
-  streaming: Omit<GrokResponsesProxyOptions, 'onEvent'>
+
+/**
+ * What is known about a submitted prompt.
+ * - `not-sent`: never written, so native never saw it; sending again is safe.
+ * - `refused`: native answered with an error before accepting it; nothing ran.
+ * - `uncertain`: written, then the connection or this pane ended before native
+ *   accepted it. It may have run; never resend it (decision uncertain-prompts).
+ * - `unconfirmed`: written and not accepted within the bound. Its turn still flows
+ *   if native runs it; never resend it.
+ * The reason names differ from OpencodeTerminalHeadless's because the transports
+ * differ; the app adapter maps both onto the same delivery dispositions.
+ */
+export type SubmitPromptResult =
+  | { ok: true; promptId: string }
+  | { ok: false; reason: 'not-sent' | 'refused' | 'uncertain' | 'unconfirmed'; promptId?: string; detail?: string }
+
+export type ConditionActionResult =
+  | { ok: true }
+  | { ok: false; reason: string; failedAtStep?: string }
+
+/** A durable-channel diagnostic. Control and conditions keep working. */
+export type GrokTerminalError = { channel: 'durable'; code: string; message: string }
+
+export type GrokHeadlessEvents = {
+  activity: [GrokActivity]
+  entry: [GrokDurableEntry]
+  /** Generation reset or caught-up boundary (history.replacement); never completion or idle. */
+  history: [GrokHistoryBoundary]
+  semantic: [SemanticEvent]
+  conditions: [ConditionSnapshot<'grok'>]
+  /** Native agent mode (interaction.plan). */
+  mode: [{ modeId: string }]
+  'transcript-error': [GrokTerminalError]
+  'live-state': [{ connected: boolean; reason?: string }]
+  /** The terminal moved to another conversation. Detection only; the app session fences input. */
+  'session-switched': [{ from: string; to: string }]
+  /** Native answered the terminal's load of this session: re-seed the session MCP set now (tool.mcp). */
+  'terminal-loaded': [{ sessionId: string }]
+  /** Native refused the terminal's load of this session (session.load-failure): report the resume as failed. */
+  'terminal-load-refused': [{ sessionId: string }]
+  exit: [{ exitCode: number; signal?: number }]
 }
-export interface GrokScreenEvent { snapshot: ScreenSnapshot }
-export interface GrokObservationMetadata { replay: boolean; generation: number; lineStartOffset: number }
-export interface GrokEntryEvent extends GrokObservationMetadata { sessionId: string; item: GrokConversationItem; raw: string }
-export type GrokHistoryEvent = FileTailerSnapshotEvent & { sessionId: string; channel: 'chat-history' | 'updates' }
-export interface GrokSessionEvent { sessionId: string }
-export interface GrokExitEvent { code: number | undefined; signal: number | undefined }
-export interface GrokActivityEvent { at: number }
-export interface GrokIdleEvent { at: number }
-export interface GrokHeadlessEvents {
-  /** Native bytes for terminal consumers; never synthesized from screen text. */
-  'pty-data': string
-  screen: GrokScreenEvent
-  'grok-entry': GrokEntryEvent
-  'grok-update': GrokUpdateEvent & GrokSessionEvent & GrokObservationMetadata
-  /** Reset precedes replacement rows; caught-up is a byte boundary, not idle. */
-  'grok-history': GrokHistoryEvent
-  session: GrokSessionEvent
-  activity: GrokActivityEvent
-  idle: GrokIdleEvent
-  exit: GrokExitEvent
-  error: Error
-  /** Per-HTTP-request observations, not asserted main-turn ownership. */
-  'stream-event': GrokStreamEvent
-  'command-permission': GrokCommandPermission | null
-}
+
 export interface GrokHeadless {
-  on<K extends keyof GrokHeadlessEvents>(event: K, listener: (payload: GrokHeadlessEvents[K]) => void): this
+  on<K extends keyof GrokHeadlessEvents>(event: K, listener: (...args: GrokHeadlessEvents[K]) => void): this
+  off<K extends keyof GrokHeadlessEvents>(event: K, listener: (...args: GrokHeadlessEvents[K]) => void): this
+  once<K extends keyof GrokHeadlessEvents>(event: K, listener: (...args: GrokHeadlessEvents[K]) => void): this
+  emit<K extends keyof GrokHeadlessEvents>(event: K, ...args: GrokHeadlessEvents[K]): boolean
+}
+
+// WHY 30 s: acceptance is the first queue notification after the request is
+// written, which every recording shows within the same observed second. A leader
+// busy starting MCP servers or under host load is still healthy at 10–20 s. The
+// bound only changes what is REPORTED: an unconfirmed prompt keeps being tracked,
+// its turn still flows if native runs it, and it is never resent.
+const DEFAULT_ACCEPTANCE_TIMEOUT_MS = 30_000
+
+const PLAN_OUTCOMES = new Set(['approved', 'cancelled', 'abandoned'])
+
+function obj(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 export class GrokHeadless extends EventEmitter {
-  private ownedRelay: GrokResponsesProxy | undefined
-  private startup: NodeJS.Immediate | undefined
-  private readonly pty: IPty
-  private readonly terminal: HeadlessTerminal
-  private readonly sessionId: string
-  private readonly waiters = new Map<ReturnType<typeof setInterval>, () => void>()
-  private readonly tailers: Array<{ drain(): Promise<void>; close(): Promise<void> }> = []
-  private exitSubscription: IDisposable | undefined
-  private dataSubscription: IDisposable | undefined
-  private closed = false
-  private cleanupPromise: Promise<void> | undefined
-  private disposePromise: Promise<void> | undefined
-  private resolveExit!: () => void
-  private readonly exited = new Promise<void>(resolve => { this.resolveExit = resolve })
-  private lastFailure: Error | undefined
-  private active = false
-  private readonly pendingCommands = new Map<string, string>()
-  private lastPermissionId: string | undefined
-  private submittedPermissionId: string | undefined
-  private updateGeneration = 0
-  private streamObservations = 0
-  private promptStreamBaseline: number | undefined
+  readonly semantic = new SemanticChannel()
+  readonly screen = new ScreenChannel()
+  readonly committed = new CommittedChannel()
 
-  static async create(options: GrokHeadlessCreateOptions): Promise<GrokHeadless> {
-    const { streaming, ...sessionOptions } = options
-    let runtime: GrokHeadless | undefined
-    const relay = await GrokResponsesProxy.create({
-      ...streaming,
-      onEvent: event => {
-        if (runtime && event.type !== 'diagnostic') runtime.streamObservations++
-        runtime?.emit('stream-event', event)
+  private readonly binding: PtyBinding
+  private readonly sessionId: string
+  private readonly file: string
+  private readonly now: () => number
+  private readonly projector: ControlStateProjector
+  private readonly sequencer: SessionSequencer
+  private readonly evaluator = makeEvaluator<'grok', GrokConditionInputs>('grok', GROK_MODULES, () => this.now())
+  private readonly acceptance = new Map<string, (result: SubmitPromptResult) => void>()
+
+  private conditionInputs: GrokConditionInputs = { permission: null, question: null, planApproval: null }
+  private conditionSnapshot: ConditionSnapshot<'grok'>
+  private history: HistoryReader | null = null
+  private detachControl: (() => void) | null = null
+  private detachGuard: (() => void) | null = null
+  private liveState: { connected: boolean; reason?: string } | null = null
+  private started = false
+  private stopped = false
+  private exited = false
+  private tornDown = false
+
+  constructor(private readonly options: GrokHeadlessOptions) {
+    super()
+    validateGrokSessionId(options.launch.sessionId)
+    this.sessionId = options.launch.sessionId
+    this.now = options.now ?? Date.now
+    // Subscribes to the PTY's exit immediately; an exit before `start()` is
+    // latched there and delivered by `start()` (see PtyBinding).
+    this.binding = new PtyBinding(options.pty)
+    this.file = resolveGrokTranscriptPath(options.cwd, this.sessionId, options.grokHome ?? options.launch.env.GROK_HOME)
+    this.projector = new ControlStateProjector(this.sessionId)
+    this.sequencer = new SessionSequencer({
+      now: this.now,
+      heartbeatMs: options.heartbeatMs,
+      settleDeadlineMs: options.settleDeadlineMs,
+      // The sequencer isolates consumer exceptions so one broken listener cannot
+      // strand a turn; they surface as a durable diagnostic, never a throw inside
+      // the state machine.
+      onSinkError: error => this.reportError('sink_failed', `a session event sink threw: ${error instanceof Error ? error.message : String(error)}`),
+      sink: {
+        entry: entry => {
+          this.committed.publish({ type: 'entry', entry, file: this.file, ts: this.now() })
+          this.emit('entry', entry)
+        },
+        history: boundary => {
+          this.committed.publish({ type: 'history', boundary, file: this.file, ts: this.now() })
+          this.emit('history', boundary)
+        },
+        semantic: event => {
+          this.semantic.publish(event)
+          this.emit('semantic', event)
+        },
+        activity: state => {
+          this.screen.publish({ type: 'activity', ...state, ts: this.now() })
+          this.emit('activity', state)
+        },
+        requests: state => {
+          this.screen.publish({ type: 'requests', state, ts: this.now() })
+          this.conditionInputs = state
+          this.publishConditions(false)
+        },
+        mode: modeId => {
+          this.screen.publish({ type: 'mode', modeId, ts: this.now() })
+          this.emit('mode', { modeId })
+        },
       },
     })
-    try {
-      runtime = new GrokHeadless({
-        ...sessionOptions,
-        proxyUrl: relay.info.proxyBaseUrl,
-        // Native cache reuse is fenced by models-list origin. Splitting the
-        // list onto the real upstream gives the relay-modified catalog the
-        // SAME identity as a plain native catalog and poisons later sessions.
-        // Keep both URLs relay-local; never sweep or rewrite the shared cache.
-        modelsListUrl: relay.info.modelsListUrl,
-        env: { ...sessionOptions.env, GROK_XAI_API_BASE_URL: relay.info.proxyBaseUrl },
-      })
-      runtime.ownedRelay = relay
-      // node-pty may return a process whose exec later fails. Such failures
-      // surface through exit (and owned cleanup), not through this rejection.
-      // Native config/managed endpoints outrank env defaults; no config is
-      // overwritten here. A turn with zero relay observations is diagnosed,
-      // not represented as proof that main-turn streaming was available.
-      return runtime
-    } catch (error) {
-      await relay.stop()
-      throw error
-    }
+    this.conditionSnapshot = this.evaluator.evaluate(this.conditionInputs)
   }
 
-  constructor(options: GrokHeadlessOptions) {
-    super()
-    const env: Record<string, string> = {}
-    for (const [key, value] of Object.entries({ ...process.env, ...options.env })) {
-      if (value !== undefined) env[key] = value
-    }
-    env.TERM = 'xterm-256color'
-    env.COLORTERM = 'truecolor'
-    if (options.grokHome) env.GROK_HOME = options.grokHome
-    const home = env.GROK_HOME || join(homedir(), '.grok')
-    if (options.proxyUrl) {
-      env.GROK_MODELS_BASE_URL = options.proxyUrl
-      env.GROK_MODELS_LIST_URL = options.modelsListUrl ?? `${options.proxyUrl.replace(/\/$/, '')}/models`
-      // Keep a manually supplied relay's catalog separate from the native
-      // upstream catalog too. create() additionally fences port reuse with a
-      // unique catalog URL and owns the listener's full lifecycle.
-    }
-    this.sessionId = options.resumeSessionId ?? randomUUID()
-    validateGrokSessionId(this.sessionId)
-    // Extra arguments may select modes, but may not replace the identity or
-    // cwd that authorizes these tailers. Otherwise this instance could read
-    // one conversation while its PTY writes into another.
-    const reserved = /^(?:-r|-s|-c|-p|--resume|--session-id|--continue|--single|--cwd|--fork-session)(?:=|$)/
-    if (options.extraArgs?.some(arg => reserved.test(arg))) throw new Error('Extra arguments cannot override session ownership')
-    const dir = join(home, 'sessions', encodeGrokSessionsDir(options.cwd), this.sessionId)
-    const args = ['--no-auto-update', options.resumeSessionId ? '-r' : '--session-id', this.sessionId, ...(options.extraArgs ?? [])]
-    const native = require('node-pty') as typeof import('node-pty')
-    const local = join(homedir(), '.local', 'bin', 'grok')
-    const binary = options.grokBinary ?? (existsSync(local) ? local : 'grok')
-    this.pty = native.spawn(binary, args, {
-      name: 'xterm-256color', cwd: options.cwd,
-      cols: options.cols ?? 120, rows: options.rows ?? 40, env,
+  /**
+   * Attach to the PTY, the control lifetime, the guard's terminal traffic and the
+   * durable history. Resolves without waiting for anything native.
+   *
+   * WHY a fence after every stage: each stage can call host code synchronously
+   * (an exit a PTY latched, an onClose for a control lifetime already gone), and
+   * that host code may stop the instance. `stop()` is idempotent, so a resource
+   * opened after such a stop would never be released.
+   */
+  async start(): Promise<void> {
+    if (this.started || this.isClosed()) return
+    this.started = true
+    this.binding.onExit(event => this.handleExit(event))
+    if (this.isClosed()) return
+    this.detachControl = this.options.control.observe({
+      onNotification: value => this.route({ kind: 'notification', method: value.method, params: value.params }),
+      onRequest: value => this.route({ kind: 'request', token: value.token, method: value.method, params: value.params }),
+      onClose: () => {
+        this.route({ kind: 'control-closed' })
+        this.setLiveState({ connected: false, reason: 'control-closed' })
+      },
     })
-    try {
-      this.terminal = new HeadlessTerminal({ pty: this.pty, cols: options.cols, rows: options.rows })
-      this.terminal.on('screen', snapshot => {
-        this.refreshCommandPermission()
-        this.emit('screen', { snapshot })
-      })
-      this.terminal.attach()
-      this.dataSubscription = this.pty.onData(data => {
-        try { this.emit('pty-data', data) } catch (error) { this.emitError(error) }
-      })
-      this.exitSubscription = this.pty.onExit(({ exitCode, signal }) => {
-        this.closed = true
-        this.exitSubscription?.dispose()
-        this.exitSubscription = undefined
-        void this.cleanup(true).catch(error => this.emitError(error as Error)).then(() => {
-          try { this.emit('exit', { code: exitCode, signal }) } finally { this.resolveExit() }
-        }).catch(error => this.emitError(error as Error))
-      })
-    } catch (error) {
-      this.dataSubscription?.dispose()
-      this.pty.kill()
-      throw error
-    }
-    // Constructors cannot publish events before the caller has had a chance
-    // to subscribe. Resume replay and fresh session identity use one boundary.
-    this.startup = setImmediate(() => {
-      this.startup = undefined
-      if (this.closed) return
-      this.emit('session', { sessionId: this.sessionId })
-      this.waitForFile(join(dir, 'chat_history.jsonl'), path => {
-        let replayThrough = 0
-        this.tailers.push(new FileTailer<unknown>(path, (_entry, metadata) => {
-          const decoded = decodeGrokConversationItem(metadata.rawLine)
-          this.emit('grok-entry', {
-            sessionId: this.sessionId, item: decoded.item, raw: decoded.raw,
-            lineStartOffset: metadata.lineStartOffset, generation: metadata.generation,
-            replay: metadata.lineStartOffset < replayThrough,
-          })
-        }, error => this.emitError(error), {
-          onSnapshot: event => {
-            // The tailer's opened descriptor defines this snapshot, not a
-            // separate path stat racing native atomic replacement. Rewritten
-            // history is replay even in a session we originally started fresh.
-            if (event.type === 'reset') replayThrough = options.resumeSessionId || event.generation > 0 ? event.snapshotByteLength : 0
-            this.emit('grok-history', { ...event, sessionId: this.sessionId, channel: 'chat-history' })
-          },
-        }))
-      })
-      this.waitForFile(join(dir, 'updates.jsonl'), path => {
-        let replayThrough = 0
-        this.tailers.push(new FileTailer<GrokUpdateEvent>(path, (entry, metadata) => {
-          if (!entry || typeof entry.timestamp !== 'number' || typeof entry.method !== 'string' ||
-            typeof entry.params?.sessionId !== 'string' || typeof entry.params?.update?.sessionUpdate !== 'string') {
-            throw new Error('Malformed update envelope')
-          }
-          if (entry.params.sessionId !== this.sessionId) {
-            throw new Error('Update envelope belongs to a different session')
-          }
-          const replay = metadata.lineStartOffset < replayThrough
-          this.emit('grok-update', {
-            ...entry, sessionId: this.sessionId, replay,
-            lineStartOffset: metadata.lineStartOffset, generation: metadata.generation,
-          })
-          if (replay) return
-          // A historical interrupted call is not a current permission request.
-          // Reissued commands must be corroborated by live update evidence.
-          this.observePendingCommand(entry.params.update)
-          // Quiet screens do not prove idle: slow inference and permission
-          // waits may paint nothing for minutes. Only provider completion
-          // ends activity; prompt_index can reset on resume and is not an ID.
-          const kind = entry.params.update.sessionUpdate
-          if (kind === 'turn_completed' && this.promptStreamBaseline !== undefined) {
-            if (this.ownedRelay && this.streamObservations === this.promptStreamBaseline) {
-              this.emit('stream-event', { type: 'diagnostic', flowId: 'unobserved-turn', code: 'no-stream-observations' })
-            }
-            this.promptStreamBaseline = undefined
-          }
-          if (kind === 'user_message_chunk') this.markActivity()
-          if (kind === 'turn_completed' && this.active) {
-            this.active = false
-            this.emit('idle', { at: Date.now() })
-          }
-        }, error => this.emitError(error), {
-          onSnapshot: event => {
-            if (event.type === 'reset') {
-              this.updateGeneration = event.generation
-              replayThrough = options.resumeSessionId || event.generation > 0 ? event.snapshotByteLength : 0
-              // A discarded update generation cannot authorize an action on
-              // a still-painted card. Require newly appended command evidence;
-              // replacement replay may contain abandoned approvals/completions.
-              if (event.generation > 0) this.clearCommandPermission()
-            }
-            this.emit('grok-history', { ...event, sessionId: this.sessionId, channel: 'updates' })
-          },
-        }))
-      })
+    if (this.isClosed()) return
+    this.detachGuard = this.options.guard.observeTerminalMessages(message => this.terminalMessage(message))
+    if (this.isClosed()) return
+    this.openHistory()
+    if (this.isClosed()) return
+    if (!this.options.control.isClosed) this.setLiveState({ connected: true })
+    // An explicit empty snapshot clears any condition a host cached under a
+    // reused pane id before this backend existed.
+    this.publishConditions(true)
+  }
+
+  /** Idempotent. Detaches from the PTY, the helpers and the history without killing or disposing anything. */
+  async stop(): Promise<void> {
+    if (this.stopped) return
+    this.stopped = true
+    this.binding.detach()
+    // Every submission still waiting was handed to the control client, so native
+    // may have it. Reporting `not-sent` would invite a duplicate turn.
+    this.settleAllSubmissions('stopped')
+    await this.teardown()
+  }
+
+  /** Raw terminal input for the host's attached terminal. Programmatic prompts use submitPrompt. */
+  write(data: string): void {
+    this.binding.write(data)
+  }
+
+  resize(cols: number, rows: number): void {
+    this.binding.resize(cols, rows)
+  }
+
+  /**
+   * Deliver a prompt over the owned control connection with a fresh client
+   * prompt id, and resolve once native ACCEPTS it: the first queue notification
+   * naming that id, waiting or running (prompt.acceptance). The model's turn
+   * continues through `semantic` and `activity`.
+   */
+  submitPrompt(text: string, opts: { timeoutMs?: number } = {}): Promise<SubmitPromptResult> {
+    // Before start nothing observes acceptance, and after close nothing will. Both
+    // refuse before writing, as OpenCode Terminal refuses before its live channel
+    // exists.
+    if (!this.started) return Promise.resolve({ ok: false, reason: 'not-sent', detail: 'not-started' })
+    if (this.isClosed()) return Promise.resolve({ ok: false, reason: 'not-sent', detail: 'closed' })
+    if (this.options.control.isClosed) return Promise.resolve({ ok: false, reason: 'not-sent', detail: 'control-closed' })
+    let rpc: GrokControlHandle['rpc']
+    try { rpc = this.options.control.rpc } catch { return Promise.resolve({ ok: false, reason: 'not-sent', detail: 'control-closed' }) }
+    const promptId = randomUUID()
+    // Registered before the write: acceptance may be observed before the write
+    // callback returns (prompt.write), and must still be attributed.
+    this.projector.registerPrompt(promptId)
+    const requested = opts.timeoutMs ?? this.options.acceptanceTimeoutMs ?? DEFAULT_ACCEPTANCE_TIMEOUT_MS
+    // Invalid timer values must not turn a bounded API into an infinite wait.
+    const timeoutMs = Number.isFinite(requested) ? Math.max(0, requested) : DEFAULT_ACCEPTANCE_TIMEOUT_MS
+    return new Promise(resolve => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = (result: SubmitPromptResult) => {
+        if (!this.acceptance.has(promptId)) return
+        this.acceptance.delete(promptId)
+        clearTimeout(timer)
+        resolve(result)
+      }
+      this.acceptance.set(promptId, finish)
+      timer = setTimeout(() => finish({ ok: false, reason: 'unconfirmed', promptId }), timeoutMs)
+      timer.unref?.()
+      // session/prompt answers at turn end, not admission, so the request itself
+      // carries no clock deadline; acceptance has its own bound above.
+      void rpc.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }], _meta: { promptId } }, { timeoutMs: null }).then(
+        result => this.route({ kind: 'prompt-result', promptId, result }),
+        (error: { code?: unknown; rpcCode?: unknown; uncertain?: unknown } | undefined) => this.route({
+          kind: 'prompt-error',
+          promptId,
+          native: error?.code === 'remote' && typeof error.rpcCode === 'number',
+          // The control client marks a failure it raised before writing
+          // `uncertain: false` (capacity, a connection already closed or aborted).
+          // Anything else may have reached native.
+          written: error?.uncertain !== false,
+          ...(typeof error?.code === 'string' ? { detail: error.code } : {}),
+        }),
+      )
     })
   }
 
-  get sessionIdentity(): string { return this.sessionId }
-  get pid(): number | undefined { return this.closed ? undefined : this.pty.pid }
-  get lastError(): Error | undefined { return this.lastFailure }
-  get streamingInfo(): GrokResponsesProxy['info'] | undefined { return this.ownedRelay?.info }
-  get commandPermission(): GrokCommandPermission | null {
-    const state = this.commandPermissionState
-    return state.status === 'card' ? state.card : null
-  }
-  get commandPermissionState(): GrokCommandPermissionState {
-    if (this.closed) return { status: 'closed' }
-    const frame = this.terminal.snapshotStableFrame()
-    if (!frame) return { status: 'unstable' }
-    if (frame.layoutEpoch !== frame.providerLayoutEpoch) return { status: 'resizing' }
-    const card = detectCommandPermission(frame.rows.map(row => row.text).join('\n'),
-      [...this.pendingCommands].map(([toolCallId, command]) => ({ toolCallId, command })))
-    // A reissued native call may reuse its text and tool ID after rewind.
-    // Resetting the consumed token alone would accept a delayed old UI action
-    // for that new card. Scope action identity to the update generation too.
-    return card ? { status: 'card', card: { ...card, id: `${this.updateGeneration}:${card.id}` } } : { status: 'none' }
+  /**
+   * Stop the running turn over control (prompt.cancel). Queued prompts keep their
+   * place and run (decision stop-scope); a running terminal-typed turn is
+   * cancelled too (decision stop-foreign-turn). True means the cancel was
+   * written, not that the turn has ended: its completion reports that.
+   */
+  async cancelTurn(): Promise<boolean> {
+    if (this.isClosed()) return false
+    try {
+      await this.options.control.rpc.notify('session/cancel', { sessionId: this.sessionId })
+      return true
+    } catch {
+      return false
+    }
   }
 
-  /** True means a one-shot key was submitted, not that execution completed. */
-  answerCommandPermission(id: string, choice: GrokPermissionChoice): boolean {
-    const current = this.commandPermission
-    if (!current || current.id !== id || this.submittedPermissionId === id) return false
-    const action = current.actions.find(candidate => candidate.id === choice)
-    if (!action) return false
-    // Re-read the native frame immediately before the write. Never retain a
-    // guessed digit across modal replacement, scope edits or terminal resize.
-    // A refused action requires a fresh user decision, not automatic digit
-    // retries: the native input owner can change while a frame is unstable.
-    this.submittedPermissionId = id
-    this.pty.write(action.key)
-    return true
+  getProviderSessionId(): string {
+    return this.sessionId
   }
 
-  private observePendingCommand(update: GrokUpdateEvent['params']['update']): void {
-    if (update.sessionUpdate === 'tool_call' && update.title === 'run_terminal_command' && typeof update.toolCallId === 'string') {
-      const input = update.rawInput as { command?: unknown } | null | undefined
-      if (update.toolCallId.length <= 256 && typeof input?.command === 'string' && input.command.length <= 65536 && this.pendingCommands.size < 64) {
-        this.pendingCommands.set(update.toolCallId, input.command)
+  getTranscriptFile(): string {
+    return this.file
+  }
+
+  getActivity(): GrokActivity {
+    return this.sequencer.currentActivity()
+  }
+
+  getConditionSnapshot(): ConditionSnapshot<'grok'> {
+    return this.conditionSnapshot
+  }
+
+  /** True once the terminal exited, including an exit latched before `start()` delivered it. */
+  isExited(): boolean {
+    return this.exited || this.binding.isExited()
+  }
+
+  /**
+   * Answer the outstanding permission, question or plan approval over control,
+   * with only the answer shapes native was recorded accepting (conditions/modules.ts).
+   * Only a request still outstanding may be answered: one the terminal resolved
+   * first is gone, and answering it is refused here before anything is written
+   * (interaction.permission).
+   */
+  async resolveConditionAction(action: ConditionCustomAction): Promise<ConditionActionResult> {
+    if (this.isClosed()) return { ok: false, reason: 'closed' }
+    const payload = obj(action.payload)
+    const token = str(payload.token)
+    if (!token) return { ok: false, reason: 'invalid-payload' }
+    let result: unknown
+    if (action.name === PERMISSION_REPLY_ACTION) {
+      const optionId = str(payload.optionId)
+      if (!optionId) return { ok: false, reason: 'invalid-payload' }
+      result = { outcome: { outcome: 'selected', optionId } }
+    } else if (action.name === PERMISSION_CANCEL_ACTION) {
+      result = { outcome: { outcome: 'cancelled' } }
+    } else if (action.name === QUESTION_CANCEL_ACTION) {
+      result = { outcome: 'cancelled' }
+    } else if (action.name === PLAN_REPLY_ACTION) {
+      const outcome = str(payload.outcome)
+      if (!outcome || !PLAN_OUTCOMES.has(outcome)) return { ok: false, reason: 'invalid-payload' }
+      if (outcome === 'cancelled') {
+        // Keeping plan mode was recorded only with feedback text
+        // (plan-exit-cancelled). A bare cancel is unrecorded, so it is refused
+        // rather than guessed.
+        const feedback = str(payload.feedback)
+        if (!feedback) return { ok: false, reason: 'invalid-payload', failedAtStep: 'keeping plan mode requires feedback' }
+        result = { outcome, feedback }
+      } else {
+        result = { outcome }
+      }
+    } else {
+      return { ok: false, reason: 'no-resolver' }
+    }
+    const pending = this.projector.currentRequests()
+    if (![pending.permission, pending.question, pending.planApproval].some(request => request?.token === token)) return { ok: false, reason: 'stale' }
+    try {
+      await this.options.control.rpc.respond(token, result)
+    } catch (error) {
+      const code = (error as { code?: unknown } | undefined)?.code
+      return { ok: false, reason: code === 'stale-request' ? 'stale' : 'aborted', failedAtStep: `respond: ${String(code ?? 'unknown')}` }
+    }
+    // Cleared as soon as the answer is written, so the condition disappears the
+    // moment the user acts; a late notification cannot bring it back.
+    this.deliverOutputs(this.projector.forgetRequest(token))
+    return { ok: true }
+  }
+
+  private route(input: ControlInput): void {
+    if (!this.isLive()) return
+    this.deliverOutputs(this.projector.apply(input))
+  }
+
+  /**
+   * Hand projector outputs on. WHY submission results and terminal detection
+   * bypass the sequencer: none of them changes a turn, a request or durable state,
+   * so there is nothing to order them against.
+   */
+  private deliverOutputs(outputs: readonly LiveOutput[]): void {
+    for (const output of outputs) {
+      switch (output.kind) {
+        case 'prompt-accepted': this.acceptance.get(output.promptId)?.({ ok: true, promptId: output.promptId }); break
+        case 'prompt-refused': this.acceptance.get(output.promptId)?.({ ok: false, reason: 'refused', promptId: output.promptId }); break
+        case 'prompt-not-sent': this.acceptance.get(output.promptId)?.({ ok: false, reason: 'not-sent', promptId: output.promptId, ...(output.detail ? { detail: output.detail } : {}) }); break
+        case 'prompt-uncertain': this.acceptance.get(output.promptId)?.({ ok: false, reason: 'uncertain', promptId: output.promptId }); break
+        case 'session-switched': if (this.isLive()) this.emit('session-switched', { from: output.from, to: output.to }); break
+        case 'terminal-loaded': if (this.isLive()) this.emit('terminal-loaded', { sessionId: output.sessionId }); break
+        case 'terminal-load-refused': if (this.isLive()) this.emit('terminal-load-refused', { sessionId: output.sessionId }); break
       }
     }
-    if (update.sessionUpdate === 'tool_call_update' && typeof update.toolCallId === 'string' &&
-      ['in_progress', 'completed', 'failed'].includes(String(update.status))) this.pendingCommands.delete(update.toolCallId)
-    if (update.sessionUpdate === 'turn_completed') this.pendingCommands.clear()
-    this.refreshCommandPermission()
-  }
-  private refreshCommandPermission(): void {
-    const current = this.commandPermission
-    if (current?.id === this.lastPermissionId) return
-    this.lastPermissionId = current?.id
-    // Keep the consumed token even across temporarily unreadable frames. A
-    // flicker must not turn one user decision into two key submissions.
-    try { this.emit('command-permission', current) } catch (error) { this.emitError(error) }
-  }
-  private clearCommandPermission(): void {
-    this.pendingCommands.clear()
-    this.submittedPermissionId = undefined
-    if (this.lastPermissionId === undefined) return
-    this.lastPermissionId = undefined
-    try { this.emit('command-permission', null) } catch (error) { this.emitError(error as Error) }
+    this.sequencer.onLiveOutputs(outputs)
   }
 
-  sendPrompt(text: string): void {
-    this.assertOpen()
-    this.promptStreamBaseline = this.streamObservations
-    this.pty.write(`\x1b[200~${text}\x1b[201~`)
-    this.pty.write('\r')
-    this.markActivity()
+  private terminalMessage(message: { direction: 'from-terminal' | 'to-terminal'; payload: string }): void {
+    if (!this.isLive()) return
+    // Native streams the whole session toward the terminal, in frames up to 64 MB
+    // when they carry images, and this layer reads only native's answers to the
+    // terminal's own load and session/new. Nothing is parsed while none is owed.
+    if (message.direction === 'to-terminal' && !this.projector.awaitingTerminalAnswers()) return
+    let rpc: unknown
+    // A payload the guard already validated as an envelope but that is not JSON
+    // names nothing this layer can act on.
+    try { rpc = JSON.parse(message.payload) } catch { return }
+    const value = obj(rpc)
+    if (message.direction === 'from-terminal' && typeof value.method === 'string') {
+      this.route({ kind: 'terminal-request', id: value.id as string | number | undefined, method: value.method, params: value.params })
+    } else if (message.direction === 'to-terminal' && value.method === undefined && value.id !== undefined) {
+      this.route({ kind: 'terminal-answer', id: value.id as string | number, result: value.result, error: value.error })
+    }
   }
-  sendInput(data: string): void { this.assertOpen(); this.pty.write(data) }
-  resize(cols: number, rows: number): void { this.assertOpen(); this.terminal.resize(cols, rows) }
 
-  dispose(): Promise<void> {
-    if (this.disposePromise) return this.disposePromise
-    const kill = !this.closed
-    this.closed = true
-    this.clearCommandPermission()
-    this.disposePromise = (async () => {
-      let force: ReturnType<typeof setTimeout> | undefined
-      let deadline: ReturnType<typeof setTimeout> | undefined
+  private openHistory(): void {
+    const reader = new HistoryReader({
+      sessionId: this.sessionId,
+      file: this.file,
+      resume: this.options.resume === true,
+      onEntries: entries => this.sequencer.onDurableEntries(entries),
+      onBoundary: boundary => this.sequencer.onHistoryBoundary(boundary),
+      onError: error => this.reportError('history_unreadable', error.message),
+    })
+    // Assigned before start: a synchronous error report may stop the instance,
+    // and teardown must find the reader.
+    this.history = reader
+    reader.start()
+  }
+
+  private handleExit(event: { exitCode: number; signal?: number }): void {
+    if (this.exited || this.stopped) return
+    this.exited = true
+    // WHY drain before closing turns, with control still routed meanwhile: the
+    // drain is the last chance to hand over what native committed before the
+    // terminal died, and a normally ended turn waiting for its answer should
+    // complete with it rather than degraded. A terminal exit is not control loss,
+    // so a completion that arrives during the drain ends its turn as native says.
+    void (async () => {
       try {
-        if (kill) {
-          this.pty.kill()
-          force = setTimeout(() => {
-            try { this.pty.kill(process.platform === 'win32' ? undefined : 'SIGKILL') }
-            catch (error) { this.emitError(error as Error) }
-          }, 1000)
-        }
-        await Promise.race([
-          this.exited,
-          new Promise<never>((_, reject) => {
-            deadline = setTimeout(() => reject(new Error('Grok PTY did not exit after termination')), 5000)
-          }),
-        ])
-      } finally {
-        clearTimeout(force)
-        clearTimeout(deadline)
-        await this.cleanup(false)
+        await this.history?.drain()
+      } catch (error) {
+        this.reportError('final_drain_incomplete', error instanceof Error ? error.message : String(error))
       }
+      if (this.stopped) return
+      this.sequencer.onExit()
+      this.settleAllSubmissions('terminal-exited')
+      await this.teardown()
+      this.emit('exit', event)
     })()
-    return this.disposePromise
   }
-  private assertOpen(): void { if (this.closed) throw new Error('Grok session is closed') }
-  private markActivity(): void {
-    if (!this.active) { this.active = true; this.emit('activity', { at: Date.now() }) }
+
+  private settleAllSubmissions(detail: string): void {
+    for (const [promptId, finish] of [...this.acceptance]) finish({ ok: false, reason: 'uncertain', promptId, detail })
   }
-  private emitError(error: unknown): void {
-    const failure = error instanceof Error ? error : new Error(String(error))
-    this.lastFailure = failure
-    // Consumer diagnostics cannot take ownership of process shutdown.
-    try { if (this.listenerCount('error')) this.emit('error', failure) } catch { /* retain lastFailure */ }
+
+  // Releases everything the instance holds, on every path that ends it. Idempotent.
+  private async teardown(): Promise<void> {
+    this.tornDown = true
+    this.binding.detach()
+    this.detachControl?.()
+    this.detachControl = null
+    this.detachGuard?.()
+    this.detachGuard = null
+    const history = this.history
+    this.history = null
+    this.sequencer.dispose()
+    await history?.stop()
   }
-  private waitForFile(path: string, start: (path: string) => void): void {
-    if (this.closed) return
-    if (existsSync(path)) { start(path); return }
-    const timer = setInterval(() => {
-      // dispose closes input before the process exits. Retain this final-file
-      // callback during that gap: the producer may still flush it on exit.
-      if (!this.closed && existsSync(path)) {
-        clearInterval(timer)
-        this.waiters.delete(timer)
-        start(path)
-      }
-    }, 100)
-    timer.unref()
-    this.waiters.set(timer, () => { if (existsSync(path)) start(path) })
+
+  /** Closed to callers: stopped, or the terminal exited. */
+  private isClosed(): boolean {
+    return this.stopped || this.exited
   }
-  private cleanup(drain: boolean): Promise<void> {
-    if (this.cleanupPromise) return this.cleanupPromise
-    this.closed = true
-    this.clearCommandPermission()
-    if (this.startup) clearImmediate(this.startup)
-    this.startup = undefined
-    for (const [timer, startFinalFile] of this.waiters) {
-      clearInterval(timer)
-      if (drain) {
-        try { startFinalFile() } catch (error) { this.emitError(error as Error) }
-      }
-    }
-    this.waiters.clear()
-    this.dataSubscription?.dispose()
-    this.dataSubscription = undefined
-    this.terminal.dispose()
-    // PTY exit may follow kill asynchronously. The exit handler, not this
-    // observation cleanup, owns that last subscription and acknowledgement.
-    this.cleanupPromise = Promise.all(this.tailers.splice(0).map(async tailer => {
-      try { if (drain) await tailer.drain() }
-      catch (error) { this.emitError(error as Error) }
-      finally { await tailer.close() }
-    })).then(async () => { await this.ownedRelay?.stop() })
-    return this.cleanupPromise
+
+  /** Still consuming control and terminal traffic: not stopped and not torn down (an exiting terminal drains first). */
+  private isLive(): boolean {
+    return !this.stopped && !this.tornDown
+  }
+
+  private setLiveState(next: { connected: boolean; reason?: string }): void {
+    if (this.liveState && this.liveState.connected === next.connected && this.liveState.reason === next.reason) return
+    this.liveState = next
+    this.emit('live-state', next)
+  }
+
+  private publishConditions(force: boolean): void {
+    const snapshot = this.evaluator.evaluate(this.conditionInputs)
+    this.conditionSnapshot = snapshot
+    if (this.evaluator.changed(this.evaluator.keyOf(snapshot)) || force) this.emit('conditions', snapshot)
+  }
+
+  private reportError(code: string, message: string): void {
+    this.committed.publish({ type: 'tail_error', code, message, ts: this.now() })
+    this.emit('transcript-error', { channel: 'durable', code, message })
   }
 }

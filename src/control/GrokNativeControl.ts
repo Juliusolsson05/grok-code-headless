@@ -4,12 +4,25 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { GrokAcpError, type GrokAcpClientOptions, type GrokAcpRequestOptions } from './GrokAcpClient.js'
+import type { GrokAcpServerRequest } from './GrokAcpClient.js'
 import { GrokLeaderConnection } from './GrokLeaderConnection.js'
 import { validateGrokSessionId } from '../transcript/SessionDirEncoding.js'
 import { validateDeadlineMs } from './deadline.js'
 import { retireResolvedInteraction } from './GrokInteractions.js'
 import type { GrokTransportObserver } from './transportObservation.js'
 export type GrokMcpServer = { type: 'http'; name: string; url: string; headers: Array<{ name: string; value: string }> }
+/**
+ * Late-attached observer seam for GrokHeadless: control traffic without
+ * lifecycle authority. WHY a set and not one callback: GrokHeadless attaches
+ * after start while a recorder may also be attached from birth, and a throwing
+ * observer must not own the protocol.
+ */
+export type GrokControlObserver = {
+  onNotification?: (value: { method: string; params?: unknown }) => void
+  onRequest?: (value: GrokAcpServerRequest) => void
+  onClose?: () => void
+}
+
 export type GrokControlLifecycleObservation = { kind: 'spawned' | 'exited' | 'process-error'; pid?: number; exitCode?: number | null; signal?: NodeJS.Signals | null }
 export interface GrokNativeControlOptions extends GrokAcpClientOptions {
   cwd: string; binary?: string; env?: NodeJS.ProcessEnv; model?: string; startupTimeoutMs?: number
@@ -45,6 +58,40 @@ export class GrokNativeControl {
     return this.child && this.child.exitCode === null && this.child.signalCode === null ? this.child.pid : undefined
   }
   get isClosed(): boolean { return this.closing }
+  private readonly observers = new Set<GrokControlObserver>()
+  private closeNotified = false
+
+  /** Raw control RPC for GrokHeadless's handle: no prompt gate, because
+   * native itself queues concurrent session/prompt requests (concurrent-prompts)
+   * and the headless layer correlates acceptance by client prompt id. */
+  request(method: string, params: unknown, options?: { signal?: AbortSignal; timeoutMs?: number | null }): Promise<unknown> { return this.rpc.request(method, params, options ?? {}) }
+  notify(method: string, params: unknown): Promise<void> { return this.rpc.notify(method, params) }
+  respond(token: string, result: unknown): Promise<void> { return this.rpc.respond(token, result) }
+
+  /** Observe control traffic and close. An observer attached after close hears
+   * the close at once, so a headless instance never waits for a notification
+   * that already happened. */
+  observe(observer: GrokControlObserver): () => void {
+    if (this.isClosed) { try { observer.onClose?.() } catch { /* observer cannot own shutdown */ } return () => { } }
+    this.observers.add(observer)
+    return () => { this.observers.delete(observer) }
+  }
+
+  private notifyNotification(value: { method: string; params?: unknown }): void {
+    for (const observer of [...this.observers]) { try { observer.onNotification?.(value) } catch { /* observer cannot own the protocol */ } }
+  }
+
+  private notifyRequest(value: GrokAcpServerRequest): void {
+    for (const observer of [...this.observers]) { try { observer.onRequest?.(value) } catch { /* observer cannot own the protocol */ } }
+  }
+
+  private notifyClosed(): void {
+    if (this.closeNotified) return
+    this.closeNotified = true
+    const observers = [...this.observers]
+    this.observers.clear()
+    for (const observer of observers) { try { observer.onClose?.() } catch { /* observer cannot own shutdown */ } }
+  }
   get rpc() {
     if (this.closing || !this.connection) throw new GrokAcpError('closed', false)
     return this.connection.rpc
@@ -103,9 +150,14 @@ export class GrokNativeControl {
       try {
         const connection = await GrokLeaderConnection.connect(this.socketPath, this.child.pid, {
           ...this.options, signal: this.abort.signal, connectTimeoutMs: Math.max(1, deadline - Date.now()),
+          // Overrides the spread's onRequest, so the consumer's own callback
+          // (GrokNativeControlOptions extends GrokAcpClientOptions) must be
+          // forwarded here, not lost.
+          onRequest: value => { this.notifyRequest(value); this.options.onRequest?.(value) },
           onNotification: value => {
             if (this.connection) retireResolvedInteraction(this.connection.rpc, value)
             this.options.onNotification?.(value)
+            this.notifyNotification(value)
           },
           onClose: () => {
             if (admitted) void this.dispose().catch(() => {})
@@ -207,6 +259,7 @@ export class GrokNativeControl {
   dispose(): Promise<void> {
     if (this.disposal) return this.disposal
     this.closing = true
+    this.notifyClosed()
     // Publish the receipt BEFORE abort closes the RPC stream synchronously.
     // Its onClose callback re-enters dispose; without this ordering dependent
     // TUI cleanup runs twice and callers observe different shutdown promises.
