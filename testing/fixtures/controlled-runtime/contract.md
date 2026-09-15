@@ -54,7 +54,7 @@ the terminal says nothing about what it shows or which conversation it follows
 | Decision | Value | What it means | Status |
 | --- | --- | --- | --- |
 | `stop-scope` | `running-turn-only` | Stop cancels the running turn; queued prompts stay queued and run | Recommended default; the user asked for all remaining work to continue without choosing |
-| `stop-foreign-turn` | `cancel-running-turn` | Stop also cancels a running turn that was typed in the terminal, because native cancels whatever runs | Recommended default, **not user-confirmed**; must be confirmed before Stage 4 wires Stop |
+| `stop-foreign-turn` | `cancel-running-turn` | Stop also cancels a running turn that was typed in the terminal, because native cancels whatever runs | Approved — confirmed by the user; Stop cancels the running turn whoever typed it |
 | `terminal-prompts` | `normal-user-messages` | Prompts typed in the terminal show as normal user messages; the root class still tells them apart internally | Recommended default, adopted like `stop-scope` |
 | `terminal-conversation-change` | `fence` | When the terminal moves to another conversation, stop forwarding terminal input and require an explicit session action | Approved ownership rule. The package detects the move; the app session owns the fence, which is new behaviour no sibling has |
 | `uncertain-prompts` | `expose-uncertain` | A prompt with an uncertain outcome is reported and never replayed | Approved end state |
