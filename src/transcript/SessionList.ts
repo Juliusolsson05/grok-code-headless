@@ -7,7 +7,7 @@
 
 import { readdirSync, readFileSync, existsSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
-import { encodeGrokSessionsDir, getGrokSessionsRoot } from './SessionDirEncoding.js'
+import { encodeGrokSessionsDir, getGrokSessionsRoot, validateGrokSessionId } from './SessionDirEncoding.js'
 import { parseGrokSummary, type GrokSessionSummary } from './SummaryJson.js'
 
 export interface GrokSessionListEntry {
@@ -45,6 +45,7 @@ export function listGrokSessions(options: {
   limit?: number
   grokHome?: string
 }): GrokSessionListEntry[] {
+  if (options.limit === 0) return []
   const dir = join(getGrokSessionsRoot(options.grokHome), encodeGrokSessionsDir(options.cwd))
   const out: GrokSessionListEntry[] = []
   for (const entry of listDirEntries(dir)) {
@@ -54,7 +55,10 @@ export function listGrokSessions(options: {
     // Unreadable/corrupt summaries are skipped, not thrown: a crashed
     // mid-write must not hide the user's other resumable sessions.
     try {
-      out.push(toEntry(parseGrokSummary(readFileSync(summaryPath, 'utf8'))))
+      const summary = parseGrokSummary(readFileSync(summaryPath, 'utf8'))
+      validateGrokSessionId(summary.info.id)
+      if (summary.info.id !== entry.name) continue
+      out.push(toEntry(summary))
     } catch {
       continue
     }
@@ -68,6 +72,7 @@ export function listAllGrokSessions(options?: {
   limit?: number
   grokHome?: string
 }): GrokSessionListEntry[] {
+  if (options?.limit === 0) return []
   const root = getGrokSessionsRoot(options?.grokHome)
   const out: GrokSessionListEntry[] = []
   for (const cwdDir of listDirEntries(root)) {
@@ -78,7 +83,10 @@ export function listAllGrokSessions(options?: {
       const summaryPath = join(cwdPath, sessionDir.name, 'summary.json')
       if (!existsSync(summaryPath)) continue
       try {
-        out.push(toEntry(parseGrokSummary(readFileSync(summaryPath, 'utf8'))))
+        const summary = parseGrokSummary(readFileSync(summaryPath, 'utf8'))
+        validateGrokSessionId(summary.info.id)
+        if (summary.info.id !== sessionDir.name) continue
+        out.push(toEntry(summary))
       } catch {
         continue
       }
@@ -93,6 +101,7 @@ export function resolveGrokTranscriptPath(
   sessionId: string,
   grokHome?: string,
 ): string {
+  validateGrokSessionId(sessionId)
   return join(
     getGrokSessionsRoot(grokHome),
     encodeGrokSessionsDir(cwd),

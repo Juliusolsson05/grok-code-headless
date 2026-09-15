@@ -53,7 +53,10 @@ for (const file of required) {
 
 if (manifest.main) {
   try {
-    await import(pathToFileURL(join(root, manifest.main)).href)
+    const api = await import(pathToFileURL(join(root, manifest.main)).href)
+    for (const name of ['GrokHeadless', 'GrokNativeControl', 'GrokAcpError']) {
+      if (typeof api[name] !== 'function') failures.push(`public runtime export ${name} is missing`)
+    }
   } catch (error) {
     failures.push(`public main entry point cannot be imported: ${error instanceof Error ? error.message : String(error)}`)
   }

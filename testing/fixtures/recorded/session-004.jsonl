@@ -1,0 +1,89 @@
+{"type":"system","content":"[fixture text 1]\n<user_info>\n[fixture text 2]\n</user_info>\n[fixture text 3]<user_info>[fixture text 4]"}
+{"type":"user","content":[{"type":"text","text":"\n[fixture text 5]"}],"synthetic_reason":"project_instructions"}
+{"type":"user","content":[{"type":"text","text":"[fixture text 6]"}],"prompt_index":0}
+{"type":"user","content":[{"type":"text","text":"[fixture text 7]"}],"synthetic_reason":"system_reminder"}
+{"type":"reasoning","id":"fixture-id-1","summary":[{"type":"summary_text","text":"[fixture text 8]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"[fixture text 9]","tool_calls":[{"id":"fixture-id-2","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 10]\"}"},{"id":"fixture-id-3","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 11]\"}"},{"id":"fixture-id-4","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 12]\"}"},{"id":"fixture-id-5","name":"fixture-tool-2","arguments":"{\"field_2\":\"[fixture text 13]\"}"},{"id":"fixture-id-6","name":"fixture-tool-2","arguments":"{\"field_2\":\"[fixture text 14]\"}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-4","content":"[fixture text 17]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-2","content":"[fixture text 18]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-3","content":"[fixture text 19]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-6","content":"[fixture text 20]"}
+{"type":"tool_result","tool_call_id":"fixture-id-5","content":"[fixture text 21]"}
+{"type":"reasoning","id":"fixture-id-7","summary":[{"type":"summary_text","text":"[fixture text 22]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"[fixture text 23]","tool_calls":[{"id":"fixture-id-8","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 24]\"}"},{"id":"fixture-id-9","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 25]\"}"},{"id":"fixture-id-10","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 26]\"}"},{"id":"fixture-id-11","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 27]\"}"},{"id":"fixture-id-12","name":"fixture-tool-2","arguments":"{\"field_2\":\"[fixture text 28]\"}"},{"id":"fixture-id-13","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 29]\"}"},{"id":"fixture-id-14","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 30]\"}"},{"id":"fixture-id-15","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 31]\"}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-9","content":"[fixture text 32]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-8","content":"[fixture text 33]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-13","content":"[fixture text 34]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-10","content":"[fixture text 35]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-14","content":"[fixture text 36]"}
+{"type":"tool_result","tool_call_id":"fixture-id-11","content":"[fixture text 37]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-15","content":"[fixture text 38]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-12","content":"[fixture text 39]"}
+{"type":"reasoning","id":"fixture-id-16","summary":[{"type":"summary_text","text":"[fixture text 40]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"","tool_calls":[{"id":"fixture-id-17","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 41]\"}"},{"id":"fixture-id-18","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 42]\"}"},{"id":"fixture-id-19","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 43]\"}"},{"id":"fixture-id-20","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 44]\"}"},{"id":"fixture-id-21","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 45]\"}"},{"id":"fixture-id-22","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 46]\"}"},{"id":"fixture-id-23","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 47]\"}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-18","content":"[fixture text 48]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-21","content":"[fixture text 49]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-17","content":"[fixture text 50]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-20","content":"[fixture text 51]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-23","content":"[fixture text 52]"}
+{"type":"tool_result","tool_call_id":"fixture-id-22","content":"[fixture text 53]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-19","content":"[fixture text 54]\n"}
+{"type":"reasoning","id":"fixture-id-24","summary":[{"type":"summary_text","text":"[fixture text 55]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"","tool_calls":[{"id":"fixture-id-25","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 56]\"}"},{"id":"fixture-id-26","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 57]\"}"},{"id":"fixture-id-27","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 58]\"}"},{"id":"fixture-id-28","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 59]\"}"},{"id":"fixture-id-29","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 60]\"}"},{"id":"fixture-id-30","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 61]\"}"},{"id":"fixture-id-31","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 62]\"}"},{"id":"fixture-id-32","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 63]\"}"},{"id":"fixture-id-33","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 64]\"}"},{"id":"fixture-id-34","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 65]\"}"},{"id":"fixture-id-35","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 66]\"}"},{"id":"fixture-id-36","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 67]\"}"},{"id":"fixture-id-37","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 68]\"}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-28","content":"[fixture text 69]"}
+{"type":"tool_result","tool_call_id":"fixture-id-25","content":"[fixture text 70]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-33","content":"[fixture text 71]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-27","content":"[fixture text 72]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-32","content":"[fixture text 73]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-30","content":"[fixture text 74]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-35","content":"[fixture text 75]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-34","content":"[fixture text 76]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-26","content":"[fixture text 77]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-31","content":"[fixture text 78]"}
+{"type":"tool_result","tool_call_id":"fixture-id-36","content":"[fixture text 79]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-37","content":"[fixture text 80]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-29","content":"[fixture text 81]\n"}
+{"type":"reasoning","id":"fixture-id-38","summary":[{"type":"summary_text","text":"[fixture text 82]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"[fixture text 83]","tool_calls":[{"id":"fixture-id-39","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 84]\"}"},{"id":"fixture-id-40","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 85]\"}"},{"id":"fixture-id-41","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 86]\"}"},{"id":"fixture-id-42","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 87]\"}"},{"id":"fixture-id-43","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 88]\"}"},{"id":"fixture-id-44","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 89]\"}"},{"id":"fixture-id-45","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 90]\"}"},{"id":"fixture-id-46","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 91]\"}"},{"id":"fixture-id-47","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 92]\"}"},{"id":"fixture-id-48","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 93]\"}"},{"id":"fixture-id-49","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 94]\"}"},{"id":"fixture-id-50","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 95]\"}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-43","content":"[fixture text 96]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-39","content":"[fixture text 97]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-42","content":"[fixture text 98]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-48","content":"[fixture text 99]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-40","content":"[fixture text 100]"}
+{"type":"tool_result","tool_call_id":"fixture-id-44","content":"[fixture text 101]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-41","content":"[fixture text 102]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-45","content":"[fixture text 103]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-47","content":"[fixture text 104]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-50","content":"[fixture text 105]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-49","content":"[fixture text 106]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-46","content":"[fixture text 107]\n"}
+{"type":"reasoning","id":"fixture-id-51","summary":[{"type":"summary_text","text":"[fixture text 108]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"","tool_calls":[{"id":"fixture-id-52","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 109]\"}"},{"id":"fixture-id-53","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 110]\"}"},{"id":"fixture-id-54","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 111]\"}"},{"id":"fixture-id-55","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 112]\"}"},{"id":"fixture-id-56","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 113]\",\"field_3\":\"[fixture text 114]\",\"field_4\":1}"},{"id":"fixture-id-57","name":"fixture-tool-2","arguments":"{\"field_2\":\"[fixture text 115]\"}"},{"id":"fixture-id-58","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 116]\",\"field_3\":\"[fixture text 117]\"}"},{"id":"fixture-id-59","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 118]\",\"limit\":1}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-52","content":"[fixture text 119]"}
+{"type":"tool_result","tool_call_id":"fixture-id-53","content":"[fixture text 120]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-54","content":"[fixture text 121]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-55","content":"[fixture text 122]"}
+{"type":"tool_result","tool_call_id":"fixture-id-57","content":"[fixture text 123]"}
+{"type":"tool_result","tool_call_id":"fixture-id-59","content":"[fixture text 124]"}
+{"type":"tool_result","tool_call_id":"fixture-id-58","content":"[fixture text 125]"}
+{"type":"tool_result","tool_call_id":"fixture-id-56","content":"[fixture text 126]"}
+{"type":"reasoning","id":"fixture-id-60","summary":[{"type":"summary_text","text":"[fixture text 127]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"","tool_calls":[{"id":"fixture-id-61","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 128]\",\"limit\":1}"},{"id":"fixture-id-62","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 129]\",\"limit\":1}"},{"id":"fixture-id-63","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 130]\",\"field_3\":\"[fixture text 117]\"}"},{"id":"fixture-id-64","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 131]\",\"field_3\":\"[fixture text 132]\"}"},{"id":"fixture-id-65","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 133]\",\"limit\":1}"},{"id":"fixture-id-66","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 134]\",\"limit\":1}"},{"id":"fixture-id-67","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 135]\",\"field_3\":\"[fixture text 136]\"}"},{"id":"fixture-id-68","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 137]\",\"offset\":1,\"limit\":1}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-65","content":"[fixture text 138]"}
+{"type":"tool_result","tool_call_id":"fixture-id-61","content":"[fixture text 139]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-66","content":"[fixture text 140]"}
+{"type":"tool_result","tool_call_id":"fixture-id-68","content":"[fixture text 141]"}
+{"type":"tool_result","tool_call_id":"fixture-id-62","content":"[fixture text 142]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-63","content":"[fixture text 143]"}
+{"type":"tool_result","tool_call_id":"fixture-id-64","content":"[fixture text 144]"}
+{"type":"tool_result","tool_call_id":"fixture-id-67","content":"[fixture text 145]"}
+{"type":"reasoning","id":"fixture-id-69","summary":[{"type":"summary_text","text":"[fixture text 146]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"","tool_calls":[{"id":"fixture-id-70","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 147]\",\"field_3\":\"[fixture text 117]\"}"},{"id":"fixture-id-71","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 148]\",\"limit\":1}"},{"id":"fixture-id-72","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 149]\",\"field_3\":\"[fixture text 150]\"}"},{"id":"fixture-id-73","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 151]\",\"limit\":1}"},{"id":"fixture-id-74","name":"fixture-tool-3","arguments":"{\"pattern\":\"[fixture text 152]\",\"field_3\":\"[fixture text 117]\"}"},{"id":"fixture-id-75","name":"fixture-tool-1","arguments":"{\"field_1\":\"[fixture text 118]\",\"offset\":1,\"limit\":1}"}],"model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}
+{"type":"tool_result","tool_call_id":"fixture-id-73","content":"[fixture text 153]"}
+{"type":"tool_result","tool_call_id":"fixture-id-71","content":"[fixture text 154]"}
+{"type":"tool_result","tool_call_id":"fixture-id-75","content":"[fixture text 155]\n"}
+{"type":"tool_result","tool_call_id":"fixture-id-70","content":"[fixture text 156]"}
+{"type":"tool_result","tool_call_id":"fixture-id-72","content":"[fixture text 144]"}
+{"type":"tool_result","tool_call_id":"fixture-id-74","content":"[fixture text 144]"}
+{"type":"reasoning","id":"fixture-id-76","summary":[{"type":"summary_text","text":"[fixture text 157]"}],"encrypted_content":"[encrypted payload omitted]","status":"completed"}
+{"type":"assistant","content":"[fixture text 158]","model_id":"[fixture text 15]","model_fingerprint":"[fixture text 16]","reasoning_effort":"medium"}

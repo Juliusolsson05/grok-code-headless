@@ -27,12 +27,8 @@ export default defineConfig({
           environment: 'node',
           include: ['src/**/*.system.test.ts'],
           fileParallelism: false,
-          // WHY forks, not the default thread pool: system tests spawn real
-          // PTYs (node-pty forkpty), and forkpty inside a worker_thread fails
-          // with a bare `posix_spawnp failed` (stage-0 integration bring-up,
-          // agent-code#832). Child processes give node-pty a normal process
-          // context; the sibling packages never hit this because they do not
-          // spawn PTYs in their own suites.
+          // Process isolation prevents mocked native PTY exports from leaking
+          // across system files. Live provider tests use a separate config.
           pool: 'forks',
         },
       },

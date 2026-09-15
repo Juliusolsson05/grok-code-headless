@@ -1,0 +1,6 @@
+{"type":"system","content":"[fixture text 1]<user_query>[fixture text 2]"}
+{"type":"user","content":[{"type":"text","text":"<user_info>\n[fixture text 3]\n</user_info>\n[fixture text 4]"}]}
+{"type":"user","content":[{"type":"text","text":"[fixture text 5]"}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"[fixture text 6]"}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"[fixture text 7]"}],"synthetic_reason":"system_reminder"}
+{"type":"user","content":[{"type":"text","text":"<user_query>\n[fixture text 8]\n</user_query>"}],"prompt_index":0}

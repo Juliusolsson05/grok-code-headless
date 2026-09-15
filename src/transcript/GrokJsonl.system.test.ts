@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync, existsSync, realpathSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { encodeGrokSessionsDir } from './SessionDirEncoding.js'
 import {
   readGrokChatHistory,
@@ -10,13 +10,21 @@ import {
 } from './GrokJsonl.js'
 import type { GrokConversationItem } from './ConversationItem.js'
 
+const directories: string[] = []
+function tempDirectory(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'grok-jsonl-'))
+  directories.push(dir)
+  return dir
+}
+afterEach(() => {
+  for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
 describe('encodeGrokSessionsDir', () => {
-  it('percent-encodes the resolved path with %2F separators', () => {
-    // Synthetic tmpdir (not a symlinked path) keeps this deterministic.
-    const dir = mkdtempSync(join(tmpdir(), 'grok-enc-'))
-    expect(encodeGrokSessionsDir(dir)).toBe(
-      realpathSync(dir).split('/').map(encodeURIComponent).join('%2F'),
-    )
+  it('uses RFC3986 encoding for punctuation in real project directory names', () => {
+    const dir = join(tempDirectory(), "Project !'()* ~")
+    mkdirSync(dir)
+    expect(encodeGrokSessionsDir(dir)).toMatch(/%2FProject%20%21%27%28%29%2A%20~$/)
   })
 
   it('resolves symlinked /var through /private/var on macOS', () => {
@@ -36,8 +44,14 @@ describe('GrokJsonl write disciplines', () => {
     content: [{ type: 'text', text: 'Remember the codeword TESTFRUIT.' }],
   }
 
+  it('returns complete native lines while the next append is still torn', async () => {
+    const path = join(tempDirectory(), 'chat_history.jsonl')
+    writeFileSync(path, '{"type":"assistant","content":"complete"}\n{"type":"assistant","content":')
+    expect((await readGrokChatHistory(path)).map(entry => entry.item.type)).toEqual(['assistant'])
+  })
+
   it('append then read preserves order and bytes', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'grok-jsonl-'))
+    const dir = tempDirectory()
     const path = join(dir, 's1', 'chat_history.jsonl')
     await appendGrokChatHistory(path, [system, user])
     await appendGrokChatHistory(path, [
@@ -50,13 +64,12 @@ describe('GrokJsonl write disciplines', () => {
   })
 
   it('full rewrite is atomic (tmp file gone) and replaces content', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'grok-jsonl-'))
+    const dir = tempDirectory()
     const path = join(dir, 's2', 'chat_history.jsonl')
     await appendGrokChatHistory(path, [system, user])
     await writeGrokChatHistory(path, [system]) // compaction-style rewrite
     expect((await readGrokChatHistory(path)).map(i => i.item.type)).toEqual(['system'])
-    expect(existsSync(`${path}.headless-tmp`)).toBe(false)
-    // sanity: the file existed before rewrite (append path ran)
-    expect(writeFileSync !== undefined).toBe(true)
+    expect(existsSync(path)).toBe(true)
+    expect(readdirSync(join(dir, 's2'))).toEqual(['chat_history.jsonl'])
   })
 })
