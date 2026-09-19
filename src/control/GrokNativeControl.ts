@@ -64,9 +64,14 @@ export class GrokNativeControl {
   /** Raw control RPC for GrokHeadless's handle: no prompt gate, because
    * native itself queues concurrent session/prompt requests (concurrent-prompts)
    * and the headless layer correlates acceptance by client prompt id. */
-  request(method: string, params: unknown, options?: { signal?: AbortSignal; timeoutMs?: number | null }): Promise<unknown> { return this.rpc.request(method, params, options ?? {}) }
-  notify(method: string, params: unknown): Promise<void> { return this.rpc.notify(method, params) }
-  respond(token: string, result: unknown): Promise<void> { return this.rpc.respond(token, result) }
+  // WHY async even though they only delegate: the `rpc` getter THROWS once the
+  // control lifetime is closed, and a synchronous throw out of `request` would
+  // escape a caller's `.then(..., fail)` chain (GrokHeadless.submitPrompt builds
+  // exactly that shape). async turns the getter throw into the rejection every
+  // caller already handles.
+  async request(method: string, params: unknown, options?: { signal?: AbortSignal; timeoutMs?: number | null }): Promise<unknown> { return this.rpc.request(method, params, options ?? {}) }
+  async notify(method: string, params: unknown): Promise<void> { return this.rpc.notify(method, params) }
+  async respond(token: string, result: unknown): Promise<void> { return this.rpc.respond(token, result) }
 
   /** Observe control traffic and close. An observer attached after close hears
    * the close at once, so a headless instance never waits for a notification

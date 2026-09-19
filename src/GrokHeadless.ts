@@ -329,21 +329,30 @@ export class GrokHeadless extends EventEmitter {
       this.acceptance.set(promptId, finish)
       timer = setTimeout(() => finish({ ok: false, reason: 'unconfirmed', promptId }), timeoutMs)
       timer.unref?.()
+      const fail = (error: { code?: unknown; rpcCode?: unknown; uncertain?: unknown } | undefined) => this.route({
+        kind: 'prompt-error',
+        promptId,
+        native: error?.code === 'remote' && typeof error.rpcCode === 'number',
+        // The control client marks a failure it raised before writing
+        // `uncertain: false` (capacity, a connection already closed or aborted).
+        // Anything else may have reached native.
+        written: error?.uncertain !== false,
+        ...(typeof error?.code === 'string' ? { detail: error.code } : {}),
+      })
       // session/prompt answers at turn end, not admission, so the request itself
       // carries no clock deadline; acceptance has its own bound above.
-      void rpc.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }], _meta: { promptId } }, { timeoutMs: null }).then(
-        result => this.route({ kind: 'prompt-result', promptId, result }),
-        (error: { code?: unknown; rpcCode?: unknown; uncertain?: unknown } | undefined) => this.route({
-          kind: 'prompt-error',
-          promptId,
-          native: error?.code === 'remote' && typeof error.rpcCode === 'number',
-          // The control client marks a failure it raised before writing
-          // `uncertain: false` (capacity, a connection already closed or aborted).
-          // Anything else may have reached native.
-          written: error?.uncertain !== false,
-          ...(typeof error?.code === 'string' ? { detail: error.code } : {}),
-        }),
-      )
+      try {
+        void rpc.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }], _meta: { promptId } }, { timeoutMs: null }).then(
+          result => this.route({ kind: 'prompt-result', promptId, result }),
+          fail,
+        )
+      } catch (error) {
+        // A handle may throw synchronously (a closed control lifetime's rpc
+        // getter, a non-async test double). That is a refusal before any write,
+        // same as a rejected `uncertain: false` — never an escaping exception
+        // that strands the timer and the registered prompt id.
+        fail(error as never)
+      }
     })
   }
 

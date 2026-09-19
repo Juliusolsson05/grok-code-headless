@@ -156,6 +156,13 @@ export class GrokTuiSocketGuard {
     } else if (this.phase !== 'forwarding' || !['acp', 'ping', 'control', 'disconnect'].includes(value.type)) {
       throw new Error('Unexpected native client message')
     }
+    // WHY the from-terminal notification lives HERE and not in observe(): the
+    // transport observation for 'received' carries the raw socket chunk, which
+    // can hold several frames or half of one. Real terminals coalesce — in 29 of
+    // the 52 corpus recordings the terminal's session/load shares a chunk with
+    // the bundle status request — and parsing a raw chunk drops every frame in
+    // it. Here the envelope is one reassembled, validated frame.
+    this.notifyTerminal('received', bytes)
     this.send(this.upstream!, bytes)
   }
   private fromLeader(bytes: Buffer): void {
@@ -249,7 +256,10 @@ export class GrokTuiSocketGuard {
   private observe(socket: Socket, kind: GrokTransportObservation['kind'], bytes?: Buffer, writeId?: number) {
     const identity = this.socketIdentities.get(socket)
     if (identity) observeTransport(this.options.onTransportObservation, { ...identity, kind, writeId }, bytes)
-    if (identity && identity.role === 'tui' && bytes) this.notifyTerminal(kind, bytes)
+    // Only the to-terminal direction notifies from here: send() writes whole
+    // frames, so its bytes are always exactly one envelope. 'received' notifies
+    // from fromTui instead (see the comment there).
+    if (identity && identity.role === 'tui' && kind === 'write-attempt' && bytes) this.notifyTerminal(kind, bytes)
   }
   private hasCapacity(bytes: Buffer): boolean {
     const held = this.earlyBytes + (this.registered?.length ?? 0) + (this.readyMarker?.length ?? 0)

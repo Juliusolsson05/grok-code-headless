@@ -78,7 +78,10 @@ describe.skipIf(!enabled)('GrokHeadless against installed Grok, in the app order
       const order: string[] = []
       const semantic: SemanticEvent[] = []
       // Step 3: attach GrokHeadless to the PTY and both handles.
-      headless = new GrokHeadless({ pty: terminal, cwd, launch, control: { isClosed: control.isClosed, rpc: control, observe: observer => control.observe(observer) }, guard, grokHome: home, heartbeatMs: 0 })
+      headless = new GrokHeadless({ pty: terminal, cwd, launch, // WHY a getter and not a snapshot: `isClosed` captured at construction stays false
+      // forever after the lifetime closes, and submitPrompt's closed check would
+      // then pass a closed control through to a throw.
+      control: { get isClosed() { return control.isClosed }, rpc: control, observe: observer => control.observe(observer) }, guard, grokHome: home, heartbeatMs: 0 })
       headless.on('semantic', event => {
         semantic.push(event)
         if (event.type === 'turn_started' || event.type === 'turn_completed') order.push(event.type)

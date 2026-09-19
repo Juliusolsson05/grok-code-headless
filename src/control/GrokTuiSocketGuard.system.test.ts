@@ -251,3 +251,18 @@ it.each([
   expect(f.faults).toEqual(['protocol'])
   expect(f.output).toEqual([])
 })
+
+it('delivers every terminal message when two ACP frames coalesce into one socket chunk', async () => {
+  // The recorded terminals coalesce frames (session/load shares a chunk with the
+  // bundle status request in 29 of 52 recordings). The terminal observer must
+  // see reassembled frames, not raw chunks, or the load id is never recorded and
+  // terminal-loaded (the app's MCP re-seed trigger) never fires.
+  const f = await fixture()
+  const messages: Array<{ direction: 'from-terminal' | 'to-terminal'; payload: string }> = []
+  guard!.observeTerminalMessages(message => messages.push({ direction: message.direction, payload: message.payload }))
+  const status = frame({ type: 'acp', payload: JSON.stringify({ jsonrpc: '2.0', id: 2, method: '_x.ai/bundle/status', params: {} }) })
+  const load = frame({ type: 'acp', payload: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'session/load', params: {} }) })
+  client!.write(Buffer.concat([status, load]))
+  await expect.poll(() => messages.filter(message => message.direction === 'from-terminal')).toHaveLength(2)
+  expect(messages.filter(message => message.direction === 'from-terminal').map(message => (JSON.parse(message.payload) as { id: number }).id)).toEqual([2, 3])
+})
