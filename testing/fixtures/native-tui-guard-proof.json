@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "kind": "native-protocol-verdict",
+  "nativeVersion": "1.0.25",
+  "nativeRevision": "f7e67d6988e2",
+  "sourceMatchesInstalledBinary": false,
+  "environment": "isolated-home-loopback-inference-and-mcp",
+  "normalGuardedTui": {
+    "replayAndLiveOutput": true,
+    "mcpInvocationAndIsolation": true,
+    "tuiRejectionRetiresControlToken": true,
+    "unexpectedImages": 0
+  },
+  "faultTestContainment": "macOS sandbox-exec deny process-fork; independently verified by a child spawn returning EPERM",
+  "faults": {
+    "failedTuiUpstreamAttachment": true,
+    "ownedLeaderSigkillWhileIdle": true,
+    "ownedLeaderSigkillDuringOutstandingInference": true,
+    "lostTurnReportedUncertain": true
+  },
+  "holdingObservation": {
+    "milliseconds": 1000,
+    "tuiRemainedAliveUntilOwnerCleanup": true,
+    "downstreamConnectionsStayedAtOne": true
+  },
+  "shutdown": {
+    "tuiExitAcknowledgedBeforeGuardRelease": true,
+    "noMatchingNativeProcessRemained": true,
+    "noDiscoveredReplacementPidSignalled": true
+  },
+  "notProven": [
+    "host-or-guard-process-death",
+    "unbounded-host-event-loop-stalls-during-native-startup",
+    "native-session-changing-command-containment",
+    "full-agent-code-provider-integration"
+  ],
+  "provenance": "Metadata-only verdict from the guarded native ACP probe and its attach/idle/mid-turn fault variants. No private paths, IDs, credentials or transcript payloads retained."
+}

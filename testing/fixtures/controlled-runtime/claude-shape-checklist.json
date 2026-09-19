@@ -1,0 +1,1180 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "agent-code",
+    "revision": "4ea8e3302eede5d81618ed03171eb0ee1de075ec",
+    "path": "src/providers/claude/renderer/shapes.ts",
+    "sha256": "494ea9f4d3efbfbfbc311f95cabbaaf98ee87a18cbb6b4fbb5e1adb61535722c"
+  },
+  "evidencePolicy": "Catalog keys are collection targets. Referenced bundles/curated fixtures are not all verbatim native recordings. This inventory establishes no Grok support.",
+  "shapeCount": 61,
+  "shapes": [
+    {
+      "claudeShapeId": "claude.entry.attachment.v1",
+      "eventTypes": [
+        "attachment"
+      ],
+      "planes": [
+        "transcript-entry"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/queued-command/final.json",
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.entry.pr-link.v1",
+      "eventTypes": [
+        "pr-link"
+      ],
+      "planes": [
+        "transcript-entry"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json",
+          "rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.entry.queue-operation.v1",
+      "eventTypes": [
+        "queue-operation"
+      ],
+      "planes": [
+        "transcript-entry"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.entry.system-compact-boundary.v1",
+      "eventTypes": [
+        "system:compact_boundary"
+      ],
+      "planes": [
+        "transcript-entry"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-22T12-46-15-717-c973322e.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.entry.system-turn-duration.v1",
+      "eventTypes": [
+        "system:turn_duration"
+      ],
+      "planes": [
+        "transcript-entry"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.entry.compact-summary.v1",
+      "eventTypes": [
+        "user"
+      ],
+      "planes": [
+        "transcript-entry"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-21T19-19-55-972-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.entry.task-notification.v1",
+      "eventTypes": [
+        "user"
+      ],
+      "planes": [
+        "transcript-entry"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-21T20-14-23-131-62432945.json",
+          "rendering-bundles/2026-06-22T12-34-16-431-2db014bc.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.askuserquestion.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-17T11-50-56-053-a6c70f19.json",
+          "rendering-bundles/2026-06-21T18-16-49-177-fc397785.json",
+          "rendering-bundles/2026-06-21T19-19-55-972-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.bash.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.edit.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json",
+          "rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json",
+          "rendering-bundles/2026-06-29T11-38-28-652-42071335.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.enterworktree.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-29T11-38-28-652-42071335.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.mcp-orchestration-close-agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json",
+          "rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.mcp-orchestration-close-run.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/agent-code-orchestration/final.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.mcp-orchestration-create-agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json",
+          "rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json",
+          "rendering-bundles/2026-06-21T19-19-55-972-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.mcp-orchestration-list-agents.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json",
+          "rendering-bundles/2026-06-21T20-14-23-131-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.mcp-orchestration-read-agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.mcp-orchestration-send-prompt.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.mcp-orchestration-wait-agents.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json",
+          "rendering-bundles/2026-06-21T20-14-23-131-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.notebookedit.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.read.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.skill.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.taskcreate.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-22T09-05-45-698-7733b0fc.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.taskupdate.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.text.v1",
+      "eventTypes": [
+        "text"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.thinking.v1",
+      "eventTypes": [
+        "thinking"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.toolsearch.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.webfetch.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/web-fetch/semantic-final.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.websearch.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/web-search/semantic-final.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.semantic.write.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "semantic-tool"
+      ],
+      "lifecycles": [
+        "input-complete",
+        "prefix"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T14-32-54-340-a8ad1ebb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-result.tool-result.v1",
+      "eventTypes": [
+        "tool_result"
+      ],
+      "planes": [
+        "committed-tool-result"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/agent/final.json",
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.askuserquestion.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-21T18-16-49-177-fc397785.json",
+          "rendering-bundles/2026-06-21T19-19-55-972-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.bash.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.edit.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json",
+          "rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.lsp.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-get-projects-list.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-list-calendars.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-list-labels.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-orchestration-close-agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json",
+          "rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-orchestration-close-run.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json",
+          "rendering-bundles/2026-06-21T18-16-49-177-fc397785.json",
+          "rendering-bundles/2026-06-21T19-19-55-972-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-orchestration-create-agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json",
+          "rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json",
+          "rendering-bundles/2026-06-21T19-19-55-972-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-orchestration-list-agents.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json",
+          "rendering-bundles/2026-06-21T18-16-49-177-fc397785.json",
+          "rendering-bundles/2026-06-21T20-14-23-131-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-orchestration-read-agent.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json",
+          "rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json",
+          "rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-orchestration-send-prompt.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json",
+          "rendering-bundles/2026-06-29T14-11-47-099-1b2b5e96.json",
+          "rendering-bundles/2026-06-29T14-13-09-044-1b2b5e96.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-orchestration-wait-agents.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json",
+          "rendering-bundles/2026-06-21T18-16-49-177-fc397785.json",
+          "rendering-bundles/2026-06-21T20-14-23-131-62432945.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.mcp-ref-search-documentation.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.monitor.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.notebookedit.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.read.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/read/final.json",
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.schedulewakeup.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-07-07T13-17-20-472-5b19529f.json",
+          "rendering-bundles/2026-07-07T13-17-48-452-5b19529f.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.skill.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.taskcreate.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-22T09-05-45-698-7733b0fc.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.taskget.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.taskoutput.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.taskstop.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.taskupdate.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.toolsearch.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/tool-search/final.json",
+          "rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json",
+          "rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json",
+          "rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.webfetch.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/web-fetch/final.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.websearch.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-shapes/claude/web-search/final.json"
+        ],
+        "prefixes": []
+      }
+    },
+    {
+      "claudeShapeId": "claude.tool-use.write.v1",
+      "eventTypes": [
+        "tool_use"
+      ],
+      "planes": [
+        "committed-tool-use"
+      ],
+      "lifecycles": [
+        "durable"
+      ],
+      "fixtures": {
+        "final": [
+          "rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json",
+          "rendering-bundles/2026-06-14T14-32-54-340-a8ad1ebb.json"
+        ],
+        "prefixes": []
+      }
+    }
+  ]
+}

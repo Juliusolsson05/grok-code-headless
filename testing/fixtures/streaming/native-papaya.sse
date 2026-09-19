@@ -1,0 +1,135 @@
+event: response.created
+data: {"sequence_number":0,"type":"response.created","response":{"id":"cf115ccc-bdaf-965d-ae95-5691b932b6de","status":"in_progress","created_at":0,"completed_at":null,"model":"grok-4.6-build","object":"response","parallel_tool_calls":true,"max_output_tokens":null,"temperature":0.699999988079071,"top_p":0.949999988079071,"store":false,"background":false,"service_tier":"default","truncation":"disabled","output":[],"tools":[],"tool_choice":"auto","reasoning":{"effort":"high","summary":"detailed"},"text":{"format":{"type":"text"}},"error":null,"incomplete_details":null,"metadata":null,"previous_response_id":null,"user":null}}
+
+event: response.in_progress
+data: {"sequence_number":1,"type":"response.in_progress","response":{"id":"cf115ccc-bdaf-965d-ae95-5691b932b6de","status":"in_progress","created_at":0,"completed_at":null,"model":"grok-4.6-build","object":"response","parallel_tool_calls":true,"max_output_tokens":null,"temperature":0.699999988079071,"top_p":0.949999988079071,"store":false,"background":false,"service_tier":"default","truncation":"disabled","output":[],"tools":[],"tool_choice":"auto","reasoning":{"effort":"high","summary":"detailed"},"text":{"format":{"type":"text"}},"error":null,"incomplete_details":null,"metadata":null,"previous_response_id":null,"user":null}}
+
+event: response.output_item.added
+data: {"sequence_number":2,"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","status":"in_progress","summary":[]}}
+
+event: response.reasoning_summary_part.added
+data: {"sequence_number":3,"type":"response.reasoning_summary_part.added","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"[reasoning omitted]"}}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":4,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":5,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":6,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":7,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":8,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":9,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":10,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":11,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":12,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":13,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":14,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":15,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":16,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":17,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":18,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":19,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":20,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":21,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":22,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":23,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":24,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":25,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":26,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":27,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":28,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":29,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":30,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":31,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":32,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.delta
+data: {"sequence_number":33,"type":"response.reasoning_summary_text.delta","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"delta":"."}
+
+event: response.reasoning_summary_text.done
+data: {"sequence_number":34,"type":"response.reasoning_summary_text.done","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"text":"[reasoning omitted]"}
+
+event: response.reasoning_summary_part.done
+data: {"sequence_number":35,"type":"response.reasoning_summary_part.done","item_id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"[reasoning omitted]"}}
+
+event: response.output_item.done
+data: {"sequence_number":36,"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","status":"completed","summary":[{"type":"summary_text","text":"[reasoning omitted]"}]}}
+
+event: response.output_item.added
+data: {"sequence_number":37,"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","role":"assistant","status":"in_progress","content":[]}}
+
+event: response.content_part.added
+data: {"sequence_number":38,"type":"response.content_part.added","item_id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":1,"content_index":0,"part":{"type":"output_text","text":"","logprobs":[],"annotations":[]}}
+
+event: response.output_text.delta
+data: {"sequence_number":39,"type":"response.output_text.delta","item_id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":1,"content_index":0,"delta":"PAP","logprobs":[]}
+
+event: response.output_text.delta
+data: {"sequence_number":40,"type":"response.output_text.delta","item_id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":1,"content_index":0,"delta":"AYA","logprobs":[]}
+
+event: response.output_text.done
+data: {"sequence_number":41,"type":"response.output_text.done","item_id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":1,"content_index":0,"text":"PAPAYA","logprobs":[]}
+
+event: response.content_part.done
+data: {"sequence_number":42,"type":"response.content_part.done","item_id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","output_index":1,"content_index":0,"part":{"type":"output_text","text":"PAPAYA","logprobs":[],"annotations":[]}}
+
+event: response.output_item.done
+data: {"sequence_number":43,"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","role":"assistant","status":"completed","content":[{"type":"output_text","text":"PAPAYA","logprobs":[],"annotations":[]}]}}
+
+event: response.completed
+data: {"sequence_number":44,"type":"response.completed","response":{"id":"cf115ccc-bdaf-965d-ae95-5691b932b6de","status":"completed","created_at":0,"completed_at":0,"model":"grok-4.6-build","object":"response","parallel_tool_calls":true,"max_output_tokens":null,"temperature":0.699999988079071,"top_p":0.949999988079071,"store":false,"background":false,"service_tier":"default","truncation":"disabled","output":[{"type":"reasoning","id":"rs_cf115ccc-bdaf-965d-ae95-5691b932b6de","status":"completed","summary":[{"type":"summary_text","text":"[reasoning omitted]"}]},{"type":"message","id":"msg_cf115ccc-bdaf-965d-ae95-5691b932b6de","role":"assistant","status":"completed","content":[{"type":"output_text","text":"PAPAYA","logprobs":[],"annotations":[]}]}],"tools":[],"tool_choice":"auto","reasoning":{"effort":"high","summary":"detailed"},"text":{"format":{"type":"text"}},"error":null,"incomplete_details":null,"metadata":null,"previous_response_id":null,"user":null,"usage":{"input_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":0,"num_sources_used":0,"num_server_side_tools_used":0,"cost_in_usd_ticks":0,"context_details":{"input_tokens":0,"output_tokens":0}}}}
+
