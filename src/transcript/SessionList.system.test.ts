@@ -45,6 +45,25 @@ describe('session discovery with the recorded summary schema', () => {
     expect(listGrokSessions({ cwd: root, grokHome: home }).map(row => row.sessionId)).toEqual([second])
   })
 
+  // agent-code#1249: summary.json is written by grok, and a build that types a
+  // field differently (a number timestamp, an object summary) used to reach
+  // the sort's localeCompare or the app's title.trim() and throw, emptying
+  // the WHOLE catalog. A mistyped optional field is dropped for that row only.
+  it('keeps every session listed when one summary has mistyped optional fields', () => {
+    const path = session(first, '2026-09-07T12:00:00Z')
+    writeFileSync(join(path, 'summary.json'), JSON.stringify({
+      ...recordedSummary, info: { id: first, cwd: root },
+      updated_at: 1789000000, last_active_at: { at: 'x' }, created_at: 7,
+      session_summary: { text: 'x' }, generated_title: ['x'], current_model_id: 42,
+    }))
+    session(second, '2026-09-07T13:00:00Z')
+    for (const rows of [listGrokSessions({ cwd: root, grokHome: home }), listAllGrokSessions({ grokHome: home })]) {
+      expect(rows.map(row => row.sessionId)).toEqual([second, first])
+      const mistyped = rows.find(row => row.sessionId === first)!
+      expect(mistyped).toEqual({ sessionId: first, cwd: root, title: first, createdAt: undefined, updatedAt: undefined, modelId: undefined })
+    }
+  })
+
   it('refuses transcript identity traversal before constructing a path', () => {
     expect(() => resolveGrokTranscriptPath(root, '../../outside', home)).toThrow(/UUID/)
   })

@@ -19,14 +19,26 @@ export interface GrokSessionListEntry {
   modelId?: string
 }
 
+// WHY every optional field is type-checked here (agent-code#1249):
+// summary.json is written and maintained by grok, and parseGrokSummary only
+// proves the identity pair. A field typed differently by some grok build (a
+// numeric timestamp, an object summary) used to flow straight into the sort's
+// localeCompare and the app's `title.trim()`, throw outside the per-row try,
+// and empty the whole catalog, which also failed switching or duplicating
+// into Grok. A mistyped field is dropped for its own row; `null` (real: 2 of
+// 52 summaries have `last_active_at: null`) already falls through the same way.
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
 function toEntry(summary: GrokSessionSummary): GrokSessionListEntry {
   return {
     sessionId: summary.info.id,
     cwd: summary.info.cwd,
-    title: summary.session_summary ?? summary.generated_title ?? summary.info.id,
-    createdAt: summary.created_at,
-    updatedAt: summary.updated_at ?? summary.last_active_at,
-    modelId: summary.current_model_id,
+    title: text(summary.session_summary) ?? text(summary.generated_title) ?? summary.info.id,
+    createdAt: text(summary.created_at),
+    updatedAt: text(summary.updated_at) ?? text(summary.last_active_at),
+    modelId: text(summary.current_model_id),
   }
 }
 
